@@ -14,18 +14,22 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+option(SYNTH_XFER_ENABLE_LTO "Enable LTO/IPO for optimized runtime" ON)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ${SYNTH_XFER_ENABLE_LTO})
 
 find_package(pybind11 CONFIG REQUIRED)
 
 set(SYNTH_XFER_SOURCES
   cpp/apint.hpp
   cpp/bindings.cpp
+  cpp/bindings_common.hpp
+  cpp/bindings_knownbits.cpp
+  cpp/bindings_uconst_range.cpp
+  cpp/bindings_sconst_range.cpp
   cpp/eval.hpp
   cpp/enum.hpp
   cpp/domain.hpp
   cpp/knownbits.hpp
-  cpp/mod.hpp
   cpp/uconst_range.hpp
   cpp/sconst_range.hpp
   cpp/rand.hpp
@@ -68,19 +72,23 @@ else()
   target_compile_options(_eval_engine PRIVATE -march=native)
 endif()
 
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag(-flto HAS_FLTO)
-if(HAS_FLTO)
-  target_compile_options(_eval_engine PRIVATE -flto)
-  target_link_options(_eval_engine PRIVATE -flto)
+if(SYNTH_XFER_ENABLE_LTO)
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag(-flto HAS_FLTO)
+  if(HAS_FLTO)
+    target_compile_options(_eval_engine PRIVATE -flto)
+    target_link_options(_eval_engine PRIVATE -flto)
+  endif()
 endif()
 
-include(CheckIPOSupported)
-check_ipo_supported(RESULT ipo_supported OUTPUT ipo_msg)
-if(ipo_supported)
-  set_property(TARGET _eval_engine PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-else()
-  message(STATUS "IPO/LTO not supported: ${ipo_msg}")
+if(SYNTH_XFER_ENABLE_LTO)
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT ipo_supported OUTPUT ipo_msg)
+  if(ipo_supported)
+    set_property(TARGET _eval_engine PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  else()
+    message(STATUS "IPO/LTO not supported: ${ipo_msg}")
+  endif()
 endif()
 
 install(TARGETS _eval_engine DESTINATION synth_xfer)
