@@ -62,4 +62,9 @@ PYBIND11_MODULE(_eval_engine, m) {
   register_knownbits_bindings(m);
   register_uconst_range_bindings(m);
   register_sconst_range_bindings(m);
+  register_mod3_bindings(m);
+  register_mod5_bindings(m);
+  register_mod7_bindings(m);
+  register_mod11_bindings(m);
+  register_mod13_bindings(m);
 }

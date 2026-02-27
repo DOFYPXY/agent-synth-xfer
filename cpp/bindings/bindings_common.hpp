@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -28,6 +29,46 @@ void register_results_class(py::module_ &m);
 void register_knownbits_bindings(py::module_ &m);
 void register_uconst_range_bindings(py::module_ &m);
 void register_sconst_range_bindings(py::module_ &m);
+void register_mod3_bindings(py::module_ &m);
+void register_mod5_bindings(py::module_ &m);
+void register_mod7_bindings(py::module_ &m);
+void register_mod11_bindings(py::module_ &m);
+void register_mod13_bindings(py::module_ &m);
+
+struct ParsedEnumRow {
+  std::vector<std::string> args;
+  std::string ret;
+};
+
+std::vector<ParsedEnumRow> parse_enum_rows(py::sequence rows,
+                                           std::size_t arity);
+std::vector<std::vector<py::object>> parse_run_rows(py::sequence rows,
+                                                    std::size_t arity);
+std::string to_lower_ascii(std::string s);
+
+using EnumLowThunk = py::object (*)(std::uintptr_t,
+                                    std::optional<std::uintptr_t>);
+using EnumMidThunk = py::object (*)(std::uintptr_t,
+                                    std::optional<std::uintptr_t>,
+                                    unsigned int, unsigned int,
+                                    std::shared_ptr<rngdist::Sampler>);
+using EnumHighThunk = py::object (*)(std::uintptr_t,
+                                     std::optional<std::uintptr_t>,
+                                     unsigned int, unsigned int, unsigned int,
+                                     std::shared_ptr<rngdist::Sampler>);
+using EvalThunk = Results (*)(py::handle, const std::vector<std::uintptr_t> &,
+                              const std::vector<std::uintptr_t> &);
+using RunThunk = py::object (*)(py::handle, std::uintptr_t);
+using LenThunk = std::size_t (*)(py::handle);
+using GetItemThunk = py::object (*)(py::handle, std::size_t);
+using IterThunk = py::object (*)(py::handle);
+
+void bind_enum_funcs(py::module_ &m, const std::string &fn_name,
+                     EnumLowThunk low, EnumMidThunk mid, EnumHighThunk high);
+void bind_eval_func(py::module_ &m, const std::string &fn_name, EvalThunk eval);
+void bind_run_func(py::module_ &m, const std::string &fn_name, RunThunk run);
+void bind_sequence_protocol(py::object cls, LenThunk len, GetItemThunk getitem,
+                            IterThunk iter);
 
 template <template <std::size_t> class D, std::size_t BW>
   requires Domain<D, BW>
@@ -66,108 +107,77 @@ void register_enum_domain(py::module_ &m) {
 
   constexpr std::size_t Arity = sizeof...(BWs);
 
-  py::class_<EvalVec>(m, cls_name.c_str())
-      .def(py::init([](py::sequence rows) {
+  auto cls = py::class_<EvalVec>(m, cls_name.c_str());
+  cls.def(py::init([](py::sequence rows) {
+        const auto parsed = parse_enum_rows(rows, Arity);
         auto v = std::make_unique<EvalVec>();
-        v->reserve(py::len(rows));
+        v->reserve(parsed.size());
 
-        for (py::handle row_h : rows) {
-          if (!py::isinstance<py::tuple>(row_h)) {
-            throw py::value_error("row must be a tuple");
-          }
-          py::tuple row = py::reinterpret_borrow<py::tuple>(row_h);
-          if (row.size() != 2) {
-            throw py::value_error("row must be (args, ret)");
-          }
-
-          if (!py::isinstance<py::tuple>(row[0])) {
-            throw py::value_error("args must be a tuple");
-          }
-          py::tuple args = py::reinterpret_borrow<py::tuple>(row[0]);
-          if (args.size() != Arity) {
-            throw py::value_error("args tuple has wrong arity");
-          }
-
-          if (!py::isinstance<py::str>(row[1])) {
-            throw py::value_error("ret must be a string");
-          }
-          const std::string ret_s = py::cast<std::string>(row[1]);
-
+        for (const auto &row : parsed) {
           auto tup = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
             ArgsTuple args_tuple{
-                Dom<BWs>::parse(py::cast<std::string>(args[Is]))...};
-            return Row{std::move(args_tuple), Dom<ResBw>::parse(ret_s)};
+                Dom<BWs>::parse(row.args[Is])...};
+            return Row{std::move(args_tuple), Dom<ResBw>::parse(row.ret)};
           }(std::make_index_sequence<Arity>{});
 
           v->emplace_back(std::move(tup));
         }
 
         return v;
-      }))
-      .def("__len__", [](const EvalVec &v) { return v.size(); })
-      .def(
-          "__getitem__",
-          [](const EvalVec &v, std::size_t i) -> const Row & {
-            if (i >= v.size()) {
-              throw py::index_error();
-            }
-            return v[i];
-          },
-          py::return_value_policy::reference_internal)
-      .def(
-          "__iter__",
-          [](const EvalVec &v) {
-            return py::make_iterator(v.begin(), v.end());
-          },
-          py::keep_alive<0, 1>());
+      }));
 
-  std::transform(dname.begin(), dname.end(), dname.begin(), ::tolower);
+  bind_sequence_protocol(
+      cls,
+      +[](py::handle self) -> std::size_t {
+        return py::cast<const EvalVec &>(self).size();
+      },
+      +[](py::handle self, std::size_t i) -> py::object {
+        const EvalVec &v = py::cast<const EvalVec &>(self);
+        if (i >= v.size()) {
+          throw py::index_error();
+        }
+        return py::cast(v[i], py::return_value_policy::reference_internal, self);
+      },
+      +[](py::handle self) -> py::object {
+        const EvalVec &v = py::cast<const EvalVec &>(self);
+        return py::make_iterator(v.begin(), v.end());
+      });
+
+  dname = to_lower_ascii(std::move(dname));
 
   std::string fn_name = dname + "_" + std::to_string(ResBw);
   ((fn_name += "_" + std::to_string(BWs)), ...);
 
-  m.def(
-      ("enum_low_" + fn_name).c_str(),
-      [](std::uintptr_t crtOpAddr, std::optional<std::uintptr_t> opConFnAddr) {
+  bind_enum_funcs(
+      m, fn_name,
+      +[](std::uintptr_t crtOpAddr,
+          std::optional<std::uintptr_t> opConFnAddr) -> py::object {
         py::gil_scoped_release release;
         EnumT ed{crtOpAddr, opConFnAddr};
-        return std::make_unique<EvalVec>(ed.genLows());
+        return py::cast(std::make_unique<EvalVec>(ed.genLows()),
+                        py::return_value_policy::take_ownership);
       },
-      py::arg("crtOpAddr"), py::arg("opConFnAddr"),
-      py::return_value_policy::take_ownership);
-
-  using SamplerPtr = std::shared_ptr<rngdist::Sampler>;
-
-  m.def(("enum_mid_" + fn_name).c_str(),
-        [](std::uintptr_t crtOpAddr, std::optional<std::uintptr_t> opConFnAddr,
-           unsigned int num_lat_samples, unsigned int seed,
-           SamplerPtr sampler) {
-          py::gil_scoped_release release;
-
-          std::mt19937 rng(seed);
-          EnumT ed{crtOpAddr, opConFnAddr};
-          return std::make_unique<EvalVec>(
-              ed.genMids(num_lat_samples, rng, *sampler));
-        },
-        py::arg("crtOpAddr"), py::arg("opConFnAddr"),
-        py::arg("num_lat_samples"), py::arg("seed"), py::arg("sampler"),
-        py::return_value_policy::take_ownership);
-
-  m.def(("enum_high_" + fn_name).c_str(),
-        [](std::uintptr_t crtOpAddr, std::optional<std::uintptr_t> opConFnAddr,
-           unsigned int num_lat_samples, unsigned int num_conc_samples,
-           unsigned int seed, SamplerPtr sampler) {
-          py::gil_scoped_release release;
-
-          std::mt19937 rng(seed);
-          EnumT ed{crtOpAddr, opConFnAddr};
-          return std::make_unique<EvalVec>(
-              ed.genHighs(num_lat_samples, num_conc_samples, rng, *sampler));
-        },
-        py::arg("crtOpAddr"), py::arg("opConFnAddr"),
-        py::arg("num_lat_samples"), py::arg("num_conc_samples"),
-        py::arg("seed"), py::arg("sampler"),
-        py::return_value_policy::take_ownership);
+      +[](std::uintptr_t crtOpAddr, std::optional<std::uintptr_t> opConFnAddr,
+          unsigned int num_lat_samples, unsigned int seed,
+          std::shared_ptr<rngdist::Sampler> sampler) -> py::object {
+        py::gil_scoped_release release;
+        std::mt19937 rng(seed);
+        EnumT ed{crtOpAddr, opConFnAddr};
+        return py::cast(std::make_unique<EvalVec>(
+                            ed.genMids(num_lat_samples, rng, *sampler)),
+                        py::return_value_policy::take_ownership);
+      },
+      +[](std::uintptr_t crtOpAddr, std::optional<std::uintptr_t> opConFnAddr,
+          unsigned int num_lat_samples, unsigned int num_conc_samples,
+          unsigned int seed,
+          std::shared_ptr<rngdist::Sampler> sampler) -> py::object {
+        py::gil_scoped_release release;
+        std::mt19937 rng(seed);
+        EnumT ed{crtOpAddr, opConFnAddr};
+        return py::cast(std::make_unique<EvalVec>(ed.genHighs(
+                            num_lat_samples, num_conc_samples, rng, *sampler)),
+                        py::return_value_policy::take_ownership);
+      });
 }
 
 template <template <std::size_t> class Dom, std::size_t ResBw,
@@ -178,21 +188,19 @@ void register_eval_domain(py::module_ &m) {
   using EvalT = Eval<Dom, ResBw, BWs...>;
 
   std::string dname = std::string(Dom<ResBw>::name);
-  std::string dname_lower = dname;
-  std::transform(dname_lower.begin(), dname_lower.end(), dname_lower.begin(),
-                 ::tolower);
+  std::string dname_lower = to_lower_ascii(std::move(dname));
 
   std::string fn_name = "eval_" + dname_lower + "_" + std::to_string(ResBw);
   ((fn_name += "_" + std::to_string(BWs)), ...);
 
-  m.def(
-      fn_name.c_str(),
-      [](const EvalVec &v, const std::vector<std::uintptr_t> &xfers,
-         const std::vector<std::uintptr_t> &bases) -> Results {
+  bind_eval_func(
+      m, fn_name,
+      +[](py::handle to_eval, const std::vector<std::uintptr_t> &xfers,
+          const std::vector<std::uintptr_t> &bases) -> Results {
+        const EvalVec &v = py::cast<const EvalVec &>(to_eval);
         py::gil_scoped_release release;
         return EvalT{xfers, bases}.eval(v);
-      },
-      py::arg("to_eval"), py::arg("xfers"), py::arg("bases"));
+      });
 }
 
 template <template <std::size_t> class Dom, std::size_t ResBw,
@@ -200,7 +208,6 @@ template <template <std::size_t> class Dom, std::size_t ResBw,
   requires(Domain<Dom, ResBw> && (Domain<Dom, BWs> && ...))
 void register_run_domain(py::module_ &m) {
   using RunVec = ArgsVec<Dom, BWs...>;
-  using Row = std::tuple<Dom<BWs>...>;
 
   std::string dname = std::string(Dom<ResBw>::name);
   std::string cls_name = std::string("Args") + dname;
@@ -208,20 +215,13 @@ void register_run_domain(py::module_ &m) {
 
   constexpr std::size_t Arity = sizeof...(BWs);
 
-  py::class_<RunVec>(m, cls_name.c_str())
-      .def(py::init([](py::sequence rows) {
+  auto cls = py::class_<RunVec>(m, cls_name.c_str());
+  cls.def(py::init([](py::sequence rows) {
+        const auto parsed = parse_run_rows(rows, Arity);
         auto v = std::make_unique<RunVec>();
-        v->reserve(py::len(rows));
+        v->reserve(parsed.size());
 
-        for (py::handle row_h : rows) {
-          if (!py::isinstance<py::tuple>(row_h)) {
-            throw py::value_error("row must be a tuple");
-          }
-          py::tuple row = py::reinterpret_borrow<py::tuple>(row_h);
-          if (row.size() != Arity) {
-            throw py::value_error("row has wrong arity");
-          }
-
+        for (const auto &row : parsed) {
           auto tup = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
             return std::tuple<Dom<BWs>...>{
                 (py::isinstance<py::str>(row[Is])
@@ -233,39 +233,39 @@ void register_run_domain(py::module_ &m) {
         }
 
         return v;
-      }))
-      .def("__len__", [](const RunVec &v) { return v.size(); })
-      .def(
-          "__getitem__",
-          [](const RunVec &v, std::size_t i) -> const Row & {
-            if (i >= v.size()) {
-              throw py::index_error();
-            }
-            return v[i];
-          },
-          py::return_value_policy::reference_internal)
-      .def(
-          "__iter__",
-          [](const RunVec &v) {
-            return py::make_iterator(v.begin(), v.end());
-          },
-          py::keep_alive<0, 1>());
+      }));
+
+  bind_sequence_protocol(
+      cls,
+      +[](py::handle self) -> std::size_t {
+        return py::cast<const RunVec &>(self).size();
+      },
+      +[](py::handle self, std::size_t i) -> py::object {
+        const RunVec &v = py::cast<const RunVec &>(self);
+        if (i >= v.size()) {
+          throw py::index_error();
+        }
+        return py::cast(v[i], py::return_value_policy::reference_internal, self);
+      },
+      +[](py::handle self) -> py::object {
+        const RunVec &v = py::cast<const RunVec &>(self);
+        return py::make_iterator(v.begin(), v.end());
+      });
 
   std::string dname_lower = dname;
-  std::transform(dname_lower.begin(), dname_lower.end(), dname_lower.begin(),
-                 ::tolower);
+  dname_lower = to_lower_ascii(std::move(dname_lower));
 
   std::string fn_name =
       "run_transformer_" + dname_lower + "_" + std::to_string(ResBw);
   ((fn_name += "_" + std::to_string(BWs)), ...);
 
-  m.def(
-      fn_name.c_str(),
-      [](const RunVec &v, std::uintptr_t xfer_addr) {
+  bind_run_func(
+      m, fn_name,
+      +[](py::handle to_run, std::uintptr_t xfer_addr) -> py::object {
+        const RunVec &v = py::cast<const RunVec &>(to_run);
         py::gil_scoped_release release;
-        return run_transformer<Dom, ResBw, BWs...>(xfer_addr, v);
-      },
-      py::arg("to_run"), py::arg("xfer_addr"));
+        return py::cast(run_transformer<Dom, ResBw, BWs...>(xfer_addr, v));
+      });
 }
 
 template <template <std::size_t> class Dom, std::size_t BW, std::size_t N>
