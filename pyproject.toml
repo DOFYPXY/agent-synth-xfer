@@ -19,7 +19,7 @@ dependencies = [
   "pandas==2.3.3",
   "egglog>=1.0.0",
   "cloudpickle",
-  "openai>=1.0.0",
+  "openai-agents",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +50,7 @@ cmake.args = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
 [tool.ruff]
 line-length = 90
 target-version = "py313"
+exclude = ["results/"]
 lint.extend-select = ["I"]
 lint.ignore = ["E731"]
 
@@ -61,6 +62,6 @@ force-sort-within-sections = true
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "standard"
-include = ["synth_xfer", "tests"]
+include = ["synth_xfer", "tests", "agent"]
 reportMissingImports = "error"
 reportUnnecessaryTypeIgnoreComment = "warning"

@@ -121,7 +121,7 @@ def run(
     mbw: list[tuple[int, int]],
     hbw: list[tuple[int, int, int]],
     op_path: Path,
-    solution_path: Path,
+    solution_path: Path | str,
     xfer_name: str,
     random_seed: int | None,
     sampler: Sampler,
