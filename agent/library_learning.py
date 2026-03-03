@@ -39,7 +39,7 @@ def load_initial_library(library_file: Path | None) -> LibraryState:
     TODO: Parse and structure a real library representation.
     """
     if library_file is None:
-        return LibraryState(version=0, functions_text="TODO")
+        return LibraryState(version=0, functions_text="builtin.module {}")
     return LibraryState(version=0, functions_text=library_file.read_text())
 
 
