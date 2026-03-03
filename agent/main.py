@@ -24,6 +24,7 @@ from .util import (
     extract_op_name,
     read_op_file,
     save_instantiated_prompt,
+    merge_library_text,
     save_transformer,
     save_library,
 )
@@ -191,7 +192,10 @@ def run_library_learn(
         print(f"Agent run dump: {dump_path}")
 
     (output_dir / f"library_output_{version}.txt").write_text(llm_output)
-    lib_text = clean_llm_output(llm_output)
+    lib_text = merge_library_text(
+        previous_library.functions_text,
+        clean_llm_output(llm_output)
+    )
     library_file = save_library(
         lib_text, output_dir, version
     )
