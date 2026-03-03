@@ -46,6 +46,9 @@ def save_transformer(output: str, output_dir: Path, op_name: str) -> Path:
     """Save generated transformer to kb_{op_name}.mlir."""
     return _save_file(output, Path(output_dir) / f"kb_{op_name.lower()}.mlir")
 
+def save_library(output: str, output_dir: Path, version: int) -> Path:
+    """Save learned library to library_v{version}.mlir"""
+    return _save_file(output, Path(output_dir) / f"library_v{version}.mlir")
 
 def save_instantiated_prompt(prompt: str, output_dir: Path, op_name: str) -> Path:
     """Save instantiated prompt to instantiated_prompt_{op_name}.md."""
