@@ -31,7 +31,9 @@ def clean_llm_output(output: str) -> str:
             start = output.find(fence) + len(fence)
             end = output.find("```", start)
             if end != -1:
-                return output[start:end].strip()
+                output = output[start:end].strip()
+                break
+    output = output.replace(r"\n", "\n").replace(r"\t", "\t")
     return output
 
 
