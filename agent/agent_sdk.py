@@ -25,6 +25,7 @@ AGENT_INSTRUCTIONS = """You synthesize KnownBits transfer functions in MLIR. You
 - In your final message return only the MLIR code, no explanation.
 - Each line of MLIR must be exactly one operation from the allowed ops; do not write %x = %y (use the value directly in the next op or in transfer.make)."""
 
+LEARN_INSTRUCTIONS = ""
 
 # Helper stuff for debugging
 def format_agent_run_dump(result) -> str:
@@ -107,5 +108,22 @@ def run_agent_synthesis(
     MAX_TURN_MESSAGE = f"You have a maximum of {max_turns} iterations to complete this task.  Do not exceed this limit."
     user_message = prompt + "\n" + MAX_TURN_MESSAGE
     result = Runner.run_sync(agent, user_message, max_turns=max_turns)
+
+    return (result.final_output, result)
+
+
+def run_agent_learn(
+    prompt: str,
+    model: str = "gpt-4",
+) -> tuple[str, object]:
+    """Run agent to learn library functions. Returns (final_output, run_result)."""
+
+    agent = Agent(
+        name="LibraryFunctionLearner",
+        instructions=LEARN_INSTRUCTIONS,
+        model=model,
+    )
+
+    result = Runner.run_sync(agent, prompt)
 
     return (result.final_output, result)
