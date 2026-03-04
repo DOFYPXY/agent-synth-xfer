@@ -39,7 +39,7 @@ def load_initial_library(library_file: Path | None) -> LibraryState:
     TODO: Parse and structure a real library representation.
     """
     if library_file is None:
-        return LibraryState(version=0, functions_text="TODO")
+        return LibraryState(version=0, functions_text="builtin.module {}")
     return LibraryState(version=0, functions_text=library_file.read_text())
 
 
@@ -59,23 +59,24 @@ def synth_phase(
 def learn_phase(
     previous_library: LibraryState,
     synthesis_results: list[SynthesisResult],
+    run_library_learn,
 ) -> LibraryState:
     """Learn an improved library from solved tasks.
 
     TODO: Implement extraction/mining and quality gating.
     """
-    _ = synthesis_results
-    return LibraryState(
-        version=previous_library.version + 1,
-        functions_text=previous_library.functions_text,
-    )
 
+    return run_library_learn(
+        previous_library=previous_library,
+        synthesis_results=synthesis_results,
+    )
 
 def run_library_learning_loop(
     tasks: list[SynthesisTask],
     num_rounds: int,
     initial_library: LibraryState,
     run_single_task,
+    run_library_learn,
 ) -> tuple[LibraryState, list[SynthesisResult]]:
     """Top-level loop: synthesize tasks, then improve library.
 
@@ -90,6 +91,6 @@ def run_library_learning_loop(
     for round_idx in range(num_rounds + 1):
         latest_results = synth_phase(tasks, library, run_single_task)
         if round_idx < num_rounds:
-            library = learn_phase(library, latest_results)
+            library = learn_phase(library, latest_results, run_library_learn)
 
     return library, latest_results

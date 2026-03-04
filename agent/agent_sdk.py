@@ -25,6 +25,12 @@ AGENT_INSTRUCTIONS = """You synthesize KnownBits transfer functions in MLIR. You
 - In your final message return only the MLIR code, no explanation.
 - Each line of MLIR must be exactly one operation from the allowed ops; do not write %x = %y (use the value directly in the next op or in transfer.make)."""
 
+LEARN_INSTRUCTIONS = """You extract reusable helper functions from KnownBits transfer functions written in MLIR.             
+- Before writing any MLIR: read all input transfer functions and identify sub-computations that recur across them or that encode a coherent semantic concept (e.g. "the maybe-zero mask", "carry propagation"). Name the concept before writing the code.
+- Only extract non-trivial helpers: a function must be at least 3 operations and must mean something in the KnownBits domain. Do not wrap a single op in a function.
+- Do not re-emit the transfer functions themselves, and do not duplicate any function already present in the existing library.
+- Each line of MLIR must be exactly one allowed operation; do not write %x = %y.
+- In your final message return only the builtin.module containing the new library functions, no explanation."""
 
 # Helper stuff for debugging
 def format_agent_run_dump(result) -> str:
@@ -107,5 +113,22 @@ def run_agent_synthesis(
     MAX_TURN_MESSAGE = f"You have a maximum of {max_turns} iterations to complete this task.  Do not exceed this limit."
     user_message = prompt + "\n" + MAX_TURN_MESSAGE
     result = Runner.run_sync(agent, user_message, max_turns=max_turns)
+
+    return (result.final_output, result)
+
+
+def run_agent_learn(
+    prompt: str,
+    model: str = "gpt-4",
+) -> tuple[str, object]:
+    """Run agent to learn library functions. Returns (final_output, run_result)."""
+
+    agent = Agent(
+        name="LibraryFunctionLearner",
+        instructions=LEARN_INSTRUCTIONS,
+        model=model,
+    )
+
+    result = Runner.run_sync(agent, prompt)
 
     return (result.final_output, result)
