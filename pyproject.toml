@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-  "scikit-build-core>=0.9",
+  "scikit-build-core>=0.11",
   "pybind11>=3.0",
   "setuptools_scm[toml]>=8",
 ]
@@ -13,12 +13,13 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
   "xdsl>=0.48.3",
-  "xdsl-smt @ https://github.com/dominicmkennedy/xdsl-smt/archive/739aa03.tar.gz",
+  "xdsl-smt @ https://github.com/dominicmkennedy/xdsl-smt/archive/38efbd0.tar.gz",
   "z3-solver==4.15.1.0",
   "llvmlite==0.44.0",
-  "pandas==2.3.3",
+  "pandas>=2.3.3",
   "egglog>=1.0.0",
-  "cloudpickle",
+  "cloudpickle>=3.1.2",
+  "PyYAML>=6.0.3",
   "openai-agents",
 ]
 
@@ -34,18 +35,45 @@ dev = [
 sxf = "synth_xfer.cli.sxf:main"
 benchmark = "synth_xfer.cli.benchmark:main"
 eval-final = "synth_xfer.cli.eval_final:main"
+run-xfer = "synth_xfer.cli.run_xfer:main"
 verify = "synth_xfer.cli.verify:main"
 lower-to-llvm = "synth_xfer.cli.lower_to_llvm:main"
 simplifier = "synth_xfer.cli.simplifier:main"
+enum = "synth_xfer.cli.enum:main"
+max-precise = "synth_xfer.cli.max_precise:main"
 agent-synth = "agent.main:main"
 
 [tool.scikit-build]
-minimum-version = "0.9"
+minimum-version = "0.11"
 build-dir = "build/"
 wheel.expand-macos-universal-tags = true
 wheel.packages = ["synth_xfer"]
-cmake.define = { CMAKE_EXPORT_COMPILE_COMMANDS = true }
-cmake.args = ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
+
+[tool.scikit-build.cmake.define]
+CMAKE_EXPORT_COMPILE_COMMANDS = true
+CMAKE_C_COMPILER = "clang"
+CMAKE_CXX_COMPILER = "clang++"
+SYNTH_XFER_DOMAINS = [
+  "knownbits",
+  "uconst_range",
+  "sconst_range",
+  "mod3",
+  "mod5",
+  "mod7",
+  "mod11",
+  "mod13",
+]
+SYNTH_XFER_ARITIES = ["1", "2", "3", "4", "5"]
+SYNTH_XFER_WIDTHS = [
+  "4", "8", "16", "32", "64",
+  # "1", "2", "3", "4", "5", "6", "7", "8", "9",
+  # "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+  # "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+  # "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+  # "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
+  # "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
+  # "60", "61", "62", "63", "64"
+]
 
 [tool.ruff]
 line-length = 90

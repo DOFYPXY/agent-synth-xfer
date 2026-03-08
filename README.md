@@ -53,7 +53,6 @@ Here's a simple invocation of the `sxf` program for quick testing (should take ~
 
 ```bash
 sxf mlir/Operations/And.mlir  \
-    -o outputs/And            \
     --domain KnownBits        \
     --num-iters 2             \
     --num-steps 100           \
@@ -71,15 +70,14 @@ Final Soln   | Exact 96.7078% | 3 solutions |
 
 (The final output may be different depending on your system's RNG differences).
 
-The command reads the MLIR program `mlir/Operations/And.mlir` and writes outputs into `outputs/And`.
+The command reads the MLIR program `mlir/Operations/And.mlir` and writes addtional output infor into `outputs/KnownBits_And/`.
 
 ### Full Experiment Setup
 
-This is a more comprehensive invocation closer to the experiment setup used in the paper:
+This is a more comprehensive invocation closer to the experiment setup used in the paper (this can take up to an hour depending on your machine):
 
 ```bash
 sxf mlir/Operations/Add.mlir          \
-    -o outputs/Add                    \
     --domain KnownBits                \
     --num-iters 5                     \
     --num-steps 1000                  \
@@ -193,3 +191,10 @@ You can omit `--dump-agent-run` if you don't need the full run dump.
 | `--dump-agent-run` | Write a full dump of the agent run (messages, tool calls, token usage) to the output dir. |
 
 Each run prints the **model** in use and **token usage** (input/output/reasoning and total). The agent is prompted to reason about the operation and KnownBits before writing MLIR and to use multiple turns to improve quality rather than stopping at the first candidate that passes eval.
+## Important CLI Options for `simplifier`
+
+| CLI flag              | Description                                                                                                 |
+|-----------------------|-------------------------------------------------------------------------------------------------------------|
+| `<input_path>`        | Path to a transformer `.mlir` file. Accepts a single function or a module (defaults to the `solution` function). |
+| `--rewrite-meet`      | Rewrite the meet of all rewritten functions instead of individual functions.                                |
+| `--quiet` / `--no-quiet` | Suppress or enable console output from the optimizer (default: quiet).                                   |

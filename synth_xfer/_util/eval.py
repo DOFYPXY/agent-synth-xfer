@@ -1,17 +1,35 @@
+from ctypes import CFUNCTYPE, c_bool, c_int64
 from typing import TYPE_CHECKING, Callable
 
-from xdsl.parser import IntegerType
+from xdsl.parser import IntegerType, ModuleOp
 from xdsl_smt.dialects.transfer import TransIntegerType
 
 from synth_xfer import _eval_engine
+from synth_xfer._util.domain import AbstractDomain
 from synth_xfer._util.eval_result import EvalResult, PerBitRes
-from synth_xfer._util.jit import Jit
+from synth_xfer._util.jit import FnPtr, Jit
 from synth_xfer._util.lower import LowerToLLVM
 from synth_xfer._util.parse_mlir import HelperFuncs
 from synth_xfer._util.random import Sampler
 
 if TYPE_CHECKING:
-    from synth_xfer._eval_engine import Results, ToEval
+    from synth_xfer._eval_engine import ArgsVec, Results, ToEval
+
+
+def _get_ee_fn_dyn(fn_name: str) -> Callable:
+    try:
+        ee_fn = getattr(_eval_engine, fn_name)
+    except AttributeError as e:
+        raise ImportError(
+            f"class/function: {fn_name!r} not compiled into eval engine.\n"
+            "Add BW, Arity, Domain combination to pyproject.toml and recompile."
+        ) from e
+    if not callable(ee_fn):
+        raise TypeError(
+            f"{ee_fn} exists but is not callable (got {type(ee_fn).__name__})"
+        )
+
+    return ee_fn
 
 
 def get_per_bit(a: "Results") -> list[PerBitRes]:
@@ -40,6 +58,17 @@ def get_per_bit(a: "Results") -> list[PerBitRes]:
     num_unsolved_exact_cases = get(x[7], "num unsolved exact", get_ints)
     sound_distance = get(x[8], "sound distance", get_floats)
 
+    # Fetch unsound/imprecise examples from C++ bindings
+    unsound_examples = a.get_unsound_examples()
+    imprecise_examples = a.get_imprecise_examples()
+
+    # for (uex, iex) in zip(unsound_examples, imprecise_examples):
+    #     print("unsound results of ith:")
+    #     for ex in uex:
+    #         print(ex)
+    #     print("imprecise results of ith:")
+    #     for ex in iex:
+    #         print(ex)
     assert len(sound) > 0, "No output from EvalEngine"
     assert (
         len(sound)
@@ -47,6 +76,8 @@ def get_per_bit(a: "Results") -> list[PerBitRes]:
         == len(exact)
         == len(num_unsolved_exact_cases)
         == len(sound_distance)
+        == len(unsound_examples)
+        == len(imprecise_examples)
     ), "EvalEngine output mismatch"
 
     return [
@@ -60,18 +91,19 @@ def get_per_bit(a: "Results") -> list[PerBitRes]:
             base_dist=base_distance,
             sound_dist=sound_distance[i],
             bitwidth=bw,
+            unsound_examples=unsound_examples[i],
+            imprecise_examples=imprecise_examples[i],
         )
         for i in range(len(sound))
     ]
 
 
-def setup_eval(
+def enum(
     lbw: list[int],
     mbw: list[tuple[int, int]],
     hbw: list[tuple[int, int, int]],
     seed: int,
     helper_funcs: HelperFuncs,
-    jit: Jit,
     sampler: Sampler,
 ) -> dict[int, "ToEval"]:
     all_bws = lbw + [x[0] for x in mbw] + [x[0] for x in hbw]
@@ -83,8 +115,6 @@ def setup_eval(
         else None
     )
 
-    jit.add_mod(str(lowerer))
-
     def get_bw(x: TransIntegerType | IntegerType, bw: int):
         return bw if isinstance(x, TransIntegerType) else x.width.data
 
@@ -95,47 +125,40 @@ def setup_eval(
         arg_str = "_".join(arg_bws)
         func_name = f"enum_{level}_{domain_str}_{ret_bw}_{arg_str}"
 
-        try:
-            enum_fn = getattr(_eval_engine, func_name)
-        except AttributeError as e:
-            raise ImportError(f"Function {func_name!r} not found in enum engine") from e
-        if not callable(enum_fn):
-            raise TypeError(
-                f"{func_name} exists but is not callable (got {type(enum_fn).__name__})"
+        return _get_ee_fn_dyn(func_name)
+
+    with Jit() as jit:
+        jit.add_mod(lowerer)
+        low_to_evals: dict[int, "ToEval"] = {
+            bw: get_enum_f("low", bw)(
+                jit.get_fn_ptr(crt[bw].name).addr,
+                jit.get_fn_ptr(op_constraint[bw].name).addr if op_constraint else None,
             )
+            for bw in lbw
+        }
 
-        return enum_fn
+        mid_to_evals: dict[int, "ToEval"] = {
+            bw: get_enum_f("mid", bw)(
+                jit.get_fn_ptr(crt[bw].name).addr,
+                jit.get_fn_ptr(op_constraint[bw].name).addr if op_constraint else None,
+                samples,
+                seed,
+                sampler.sampler,
+            )
+            for bw, samples in mbw
+        }
 
-    low_to_evals: dict[int, "ToEval"] = {
-        bw: get_enum_f("low", bw)(
-            jit.get_fn_ptr(crt[bw].name),
-            jit.get_fn_ptr(op_constraint[bw].name) if op_constraint else None,
-        )
-        for bw in lbw
-    }
-
-    mid_to_evals: dict[int, "ToEval"] = {
-        bw: get_enum_f("mid", bw)(
-            jit.get_fn_ptr(crt[bw].name),
-            jit.get_fn_ptr(op_constraint[bw].name) if op_constraint else None,
-            samples,
-            seed,
-            sampler.sampler,
-        )
-        for bw, samples in mbw
-    }
-
-    high_to_evals: dict[int, "ToEval"] = {
-        bw: get_enum_f("high", bw)(
-            jit.get_fn_ptr(crt[bw].name),
-            jit.get_fn_ptr(op_constraint[bw].name) if op_constraint else None,
-            lat_samples,
-            crt_samples,
-            seed,
-            sampler.sampler,
-        )
-        for bw, lat_samples, crt_samples in hbw
-    }
+        high_to_evals: dict[int, "ToEval"] = {
+            bw: get_enum_f("high", bw)(
+                jit.get_fn_ptr(crt[bw].name).addr,
+                jit.get_fn_ptr(op_constraint[bw].name).addr if op_constraint else None,
+                lat_samples,
+                crt_samples,
+                seed,
+                sampler.sampler,
+            )
+            for bw, lat_samples, crt_samples in hbw
+        }
 
     return low_to_evals | mid_to_evals | high_to_evals
 
@@ -150,25 +173,107 @@ def get_eval_res(per_bits: list[list[PerBitRes]]) -> list[EvalResult]:
 
 
 def eval_transfer_func(
-    x: dict[int, tuple["ToEval", list[int], list[int]]],
+    x: dict[int, tuple["ToEval", list[FnPtr], list[FnPtr]]],
+    unsound_ex: int = 0,
+    imprecise_ex: int = 0,
 ) -> list[EvalResult]:
-    def get_eval_f(x: "ToEval") -> Callable[["ToEval", list[int], list[int]], "Results"]:
+    def get_eval_f(
+        x: "ToEval",
+    ) -> Callable[["ToEval", list[int], list[int], int, int], "Results"]:
         suffix = x.__class__.__name__.lower()[6:]
         func_name = f"eval_{suffix}"
 
-        try:
-            eval_fn = getattr(_eval_engine, func_name)
-        except AttributeError as e:
-            raise ImportError(f"Function {func_name!r} not found in eval engine") from e
-        if not callable(eval_fn):
-            raise TypeError(
-                f"{func_name} exists but is not callable (got {type(eval_fn).__name__})"
-            )
-        return eval_fn
+        return _get_ee_fn_dyn(func_name)
 
-    per_bits = [
-        get_per_bit(get_eval_f(to_eval)(to_eval, xs, bs))
-        for to_eval, xs, bs in x.values()
-    ]
+    per_bits = []
+    for to_eval, xs, bs in x.values():
+        xs_addrs = [x.addr for x in xs]
+        bs_addrs = [b.addr for b in bs]
+        result = get_eval_f(to_eval)(
+            to_eval, xs_addrs, bs_addrs, unsound_ex, imprecise_ex
+        )
+        per_bits.append(get_per_bit(result))
 
     return get_eval_res(per_bits)
+
+
+def parse_to_run_inputs(
+    domain: AbstractDomain, bw: int, arity: int, inputs: list[tuple[str, ...]]
+) -> "ArgsVec":
+    cls_name = f"Args{domain}"
+    for _ in range(arity):
+        cls_name += f"_{bw}"
+
+    to_run_cls = _get_ee_fn_dyn(cls_name)
+
+    return to_run_cls(inputs)
+
+
+def parse_to_eval_inputs(
+    domain: AbstractDomain, bw: int, arity: int, inputs: list[tuple[tuple[str, ...], str]]
+) -> "ToEval":
+    cls_name = f"ToEval{domain}"
+    for _ in range(arity + 1):
+        cls_name += f"_{bw}"
+
+    to_eval_cls = _get_ee_fn_dyn(cls_name)
+
+    return to_eval_cls(inputs)
+
+
+def run_xfer_fn(
+    domain: AbstractDomain,
+    bw: int,
+    input_args: "ArgsVec",
+    mlir_mod: ModuleOp,
+    xfer_name: str,
+):
+    lowerer = LowerToLLVM([bw])
+    lowerer.add_mod(mlir_mod, [xfer_name])
+
+    fn_name = f"run_transformer_{str(domain).lower()}"
+    for _ in range(len(input_args[0]) + 1):
+        fn_name += f"_{bw}"
+
+    run_fn = _get_ee_fn_dyn(fn_name)
+
+    with Jit() as jit:
+        jit.add_mod(lowerer)
+        fn_ptr = jit.get_fn_ptr(f"{xfer_name}_{bw}_shim")
+
+        return run_fn(input_args, fn_ptr.addr)
+
+
+def run_concrete_fn(
+    helper_funcs: HelperFuncs, bw: int, args: list[tuple[int, ...]]
+) -> list[int | None]:
+    lowerer = LowerToLLVM([bw])
+    crt = lowerer.add_fn(helper_funcs.crt_func, shim=True)
+    op_constraint = (
+        lowerer.add_fn(helper_funcs.op_constraint_func, shim=True)
+        if helper_funcs.op_constraint_func
+        else None
+    )
+
+    arity = len(args[0])
+    conc_op_type = CFUNCTYPE(c_int64, *(c_int64 for _ in range(arity)))
+    op_con_type = CFUNCTYPE(c_bool, *(c_int64 for _ in range(arity)))
+
+    results: list[int | None] = []
+
+    with Jit() as jit:
+        jit.add_mod(lowerer)
+        conc_op_fn = conc_op_type(jit.get_fn_ptr(crt[bw].name).addr)
+        op_con_fn = (
+            op_con_type(jit.get_fn_ptr(op_constraint[bw].name).addr)
+            if op_constraint
+            else None
+        )
+
+        for x in args:
+            if not op_con_fn or op_con_fn(*x):
+                results.append(conc_op_fn(*x))
+
+            results.append(None)
+
+    return results
