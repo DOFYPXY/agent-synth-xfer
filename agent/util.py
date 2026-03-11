@@ -48,15 +48,18 @@ def save_transformer(output: str, output_dir: Path, op_name: str) -> Path:
     """Save generated transformer to kb_{op_name}.mlir."""
     return _save_file(output, Path(output_dir) / f"kb_{op_name.lower()}.mlir")
 
+
 def save_library(output: str, output_dir: Path, version: int) -> Path:
     """Save learned library to library_v{version}.mlir"""
     return _save_file(output, Path(output_dir) / f"library_v{version}.mlir")
+
 
 def save_instantiated_prompt(prompt: str, output_dir: Path, op_name: str) -> Path:
     """Save instantiated prompt to instantiated_prompt_{op_name}.md."""
     return _save_file(
         prompt, Path(output_dir) / f"instantiated_prompt_{op_name.lower()}.md"
     )
+
 
 def _extract_module_body(mlir: str) -> str:
     """Extract content inside the outermost builtin.module { } block, dedented by 2 spaces."""
@@ -83,8 +86,11 @@ def merge_library_text(lib1: str, lib2: str) -> str:
     body2 = _extract_module_body(lib2)
     combined = "\n".join(part for part in [body1, body2] if part)
     # Re-indent each non-blank line by 2 spaces
-    indented = "\n".join("  " + line if line.strip() else "" for line in combined.splitlines())
+    indented = "\n".join(
+        "  " + line if line.strip() else "" for line in combined.splitlines()
+    )
     return f"builtin.module {{\n{indented}\n}}"
+
 
 def eval_transformer(
     solution_path: Path | str,

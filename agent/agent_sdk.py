@@ -14,8 +14,8 @@ from agents.items import (
 
 from synth_xfer._util.domain import AbstractDomain
 
-from .util import eval_transformer, merge_library_text
 from .library_learning import LibraryState
+from .util import eval_transformer, merge_library_text
 
 # System instructions live as markdown files next to this module.
 _AGENT_DIR = Path(__file__).parent
@@ -41,8 +41,7 @@ def _format_tool_call_args(args) -> str:
             return args
     if isinstance(args, dict):
         parts = [
-            f"{k}:\n{(v if isinstance(v, str) else str(v))}"
-            for k, v in args.items()
+            f"{k}:\n{(v if isinstance(v, str) else str(v))}" for k, v in args.items()
         ]
         return "\n\n".join(parts)
     return args if isinstance(args, str) else str(args)
@@ -181,10 +180,7 @@ def run_agent_synthesis(
         - Exact %: the percentage of inputs for which the output abstract value is exactly the same the optimal transfer function (perfect precision)
         - Norm: ignore for now
         """
-        full_soln = merge_library_text(
-            library.functions_text, 
-            transformer_mlir
-        )
+        full_soln = merge_library_text(library.functions_text, transformer_mlir)
 
         # Xuanyu: let agent understand simple metrics first for now. Use Norm later.
         return eval_transformer(

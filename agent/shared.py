@@ -25,6 +25,7 @@ def build_prompt(
 
     return prompt
 
+
 def build_library_learn_prompt(
     prompt_template: str,
     synth_functions: str,

@@ -9,7 +9,7 @@ import sys
 
 from synth_xfer._util.domain import AbstractDomain
 
-from .agent_sdk import format_agent_run_dump, run_agent_synthesis, run_agent_learn
+from .agent_sdk import format_agent_run_dump, run_agent_learn, run_agent_synthesis
 from .library_learning import (
     LibraryState,
     SynthesisResult,
@@ -22,18 +22,15 @@ from .util import (
     clean_llm_output,
     eval_transformer,
     extract_op_name,
-    save_instantiated_prompt,
     merge_library_text,
-    save_transformer,
+    save_instantiated_prompt,
     save_library,
+    save_transformer,
 )
 
 
 def run_eval(
-    op_file_path: str,
-    transformer: SynthesisResult, 
-    library: LibraryState,
-    op_name: str
+    op_file_path: str, transformer: SynthesisResult, library: LibraryState, op_name: str
 ) -> str:
     """Evaluate the transformer via eval_transformer (no subprocess)."""
     print("\nRunning eval (Python)...")
@@ -120,13 +117,7 @@ def run_single_synthesis_task(
 
     print(f"Using model: {args.model}")
     llm_output, run_result = run_agent_synthesis(
-        prompt,
-        task.op_file,
-        task.op_name,
-        api_key,
-        library,
-        args.model,
-        args.max_turns
+        prompt, task.op_file, task.op_name, api_key, library, args.model, args.max_turns
     )
 
     print_token_usage(run_result)
@@ -151,11 +142,7 @@ def run_single_synthesis_task(
 
     eval_summary: str | None = None
     if not args.skip_eval:
-        eval_summary = run_eval(task.op_file,
-                                result,
-                                library,
-                                task.op_name
-        )
+        eval_summary = run_eval(task.op_file, result, library, task.op_name)
         print(f"Eval result:\n{eval_summary}")
         eval_file = output_dir / f"eval_{task.op_name.lower()}.txt"
         eval_file.write_text(eval_summary)
@@ -167,6 +154,7 @@ def run_single_synthesis_task(
         transformer_path=transformer_file,
         eval_summary=eval_summary,
     )
+
 
 def run_library_learn(
     previous_library: LibraryState,
@@ -196,15 +184,12 @@ def run_library_learn(
 
     output_dir = Path(args.output)
     print(
-        f"Prompt saved to: {save_instantiated_prompt(prompt, output_dir, f"library{version}")}"
+        f"Prompt saved to: {save_instantiated_prompt(prompt, output_dir, f'library{version}')}"
     )
 
     print(f"Using model: {args.model}")
-    llm_output, run_result = run_agent_learn(
-        prompt=prompt,
-        model=args.model
-    )
-    
+    llm_output, run_result = run_agent_learn(prompt=prompt, model=args.model)
+
     print_token_usage(run_result)
 
     if args.dump_agent_run:
@@ -214,18 +199,16 @@ def run_library_learn(
 
     (output_dir / f"library_output_{version}.txt").write_text(llm_output)
     lib_text = merge_library_text(
-        previous_library.functions_text,
-        clean_llm_output(llm_output)
+        previous_library.functions_text, clean_llm_output(llm_output)
     )
-    library_file = save_library(
-        lib_text, output_dir, version
-    )
+    library_file = save_library(lib_text, output_dir, version)
     print(f"Library: {library_file}")
 
     return LibraryState(
         version,
         lib_text,
     )
+
 
 def main():
     """Synthesize transformer using selected method."""
@@ -312,14 +295,14 @@ def main():
         )
 
     def _library_learn(
-            previous_library: LibraryState,
-            synthesis_results: list[SynthesisResult],
+        previous_library: LibraryState,
+        synthesis_results: list[SynthesisResult],
     ) -> LibraryState:
         return run_library_learn(
             previous_library=previous_library,
             synthesis_results=synthesis_results,
             args=args,
-            api_key=api_key
+            api_key=api_key,
         )
 
     final_library, latest_results = run_library_learning_loop(
