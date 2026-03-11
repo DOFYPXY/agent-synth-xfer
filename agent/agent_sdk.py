@@ -17,12 +17,13 @@ from synth_xfer._util.domain import AbstractDomain
 from .library_learning import LibraryState
 from .util import eval_transformer, merge_library_text
 
-# System instructions live as markdown files next to this module.
+# System instructions live under agent/md.
 _AGENT_DIR = Path(__file__).parent
+_MD_DIR = _AGENT_DIR / "md"
 
 
 def _read_instruction_file(name: str) -> str:
-    text = (_AGENT_DIR / name).read_text(encoding="utf-8")
+    text = (_MD_DIR / name).read_text(encoding="utf-8")
     return text.strip()
 
 

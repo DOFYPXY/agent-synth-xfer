@@ -237,14 +237,14 @@ def main():
     parser.add_argument(
         "--synth-prompt",
         type=Path,
-        default=Path(__file__).parent / "prompt.md",
+        default=Path(__file__).parent / "md" / "prompt.md",
         help="Path to synthesis prompt template (default: agent/prompt.md)",
     )
     parser.add_argument(
         "--library-prompt",
         type=Path,
-        default=Path(__file__).parent / "library_prompt.md",
-        help="Path to library learning prompt template (default: agent/library_prompt.md",
+        default=Path(__file__).parent / "md" / "library_prompt.md",
+        help="Path to library learning prompt template (default: agent/md/library_prompt.md)",
     )
     parser.add_argument(
         "--examples-dir",
@@ -255,13 +255,13 @@ def main():
     parser.add_argument(
         "--ops",
         type=Path,
-        default=Path(__file__).parent / "ops.md",
+        default=Path(__file__).parent / "md" / "ops.md",
         help="Path to ops.md file (default: agent/ops.md)",
     )
     parser.add_argument(
         "--template",
         type=Path,
-        default=Path(__file__).parent / "template.mlir",
+        default=Path(__file__).parent / "template" / "template.mlir",
         help="Path to template.mlir file (default: agent/template.mlir)",
     )
     parser.add_argument(
