@@ -192,7 +192,7 @@ def run_single_synthesis_task(
         "Prioritize reusing functions from get_library_text() — they are mined from previous rounds and can potentially shorten your solution significantly.\n"
         "\n"
         "Output contract:\n"
-        f"- Return ONLY MLIR (builtin.module) defining func.func @kb_{op_lower}\n"
+        f"- Return ONLY MLIR func.func @kb_{op_lower}\n"
         "- One operation per line; SSA form; no explanations.\n"
         "\n"
         f"You have a maximum of {args.max_turns} iterations to complete this task.  "

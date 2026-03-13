@@ -99,6 +99,8 @@ def save_file(content: str, dir: Path, file_name: str) -> Path:
 
 def _extract_module_body(mlir: str) -> str:
     """Extract content inside the outermost builtin.module { } block, dedented by 2 spaces."""
+    if "{" not in mlir:
+        return mlir
     start = mlir.index("{") + 1
     depth = 1
     i = start
@@ -109,17 +111,13 @@ def _extract_module_body(mlir: str) -> str:
             depth -= 1
         i += 1
     inner = mlir[start : i - 1]
-    # Strip the 2-space module-level indentation from each line
-    lines = []
-    for line in inner.splitlines():
-        lines.append(line[2:] if line.startswith("  ") else line)
+    lines = [line[2:] if line.startswith("  ") else line for line in inner.splitlines()]
     return "\n".join(lines).strip()
 
 
-def merge_library_text(lib1: str, lib2: str) -> str:
-    """Merge two builtin.module MLIR strings into one module containing all functions."""
+def merge_library_text(lib1: str, body2: str) -> str:
+    """Merge library text (lib1) with new function body (body2) into a single builtin.module."""
     body1 = _extract_module_body(lib1)
-    body2 = _extract_module_body(lib2)
     combined = "\n".join(part for part in [body1, body2] if part)
     # Re-indent each non-blank line by 2 spaces
     indented = "\n".join(
