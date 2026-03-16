@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Agent for synthesizing transfer functions using LLM via OpenAI Agent API."""
 
+import asyncio
 import os
 from pathlib import Path
 import sys
 
 from .args import parse_args
 from .learn import run_library_learn
-from .synth import run_single_synthesis_task
+from .synth import run_synthesis_tasks
 from .util import (
     LibraryState,
     SynthesisResult,
@@ -30,10 +31,9 @@ def run_library_learning_loop(
 
     # Round 0 is synthesis-only (single-shot equivalent).
     for round_idx in range(num_rounds + 1):
-        latest_results = []
-        for task in tasks:
-            result = run_single_synthesis_task(task, round_idx, library, args, api_key)
-            latest_results.append(result)
+        latest_results = asyncio.run(
+            run_synthesis_tasks(tasks, round_idx, library, args, api_key)
+        )
         if round_idx < num_rounds:
             library = run_library_learn(
                 version=round_idx + 1,

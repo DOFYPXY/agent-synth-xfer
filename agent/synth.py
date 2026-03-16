@@ -1,5 +1,6 @@
 """Synthesis workflow helpers."""
 
+import asyncio
 import json
 from pathlib import Path
 import time
@@ -21,7 +22,7 @@ from .util import (
 )
 
 
-def run_agent_synthesis(
+async def run_agent_synthesis(
     prompt: str,
     op_file: str,
     op_name: str,
@@ -142,7 +143,7 @@ def run_agent_synthesis(
         model=model,
     )
 
-    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
+    result = await Runner.run(agent, prompt, max_turns=max_turns)
 
     return (result.final_output, result)
 
@@ -154,8 +155,6 @@ def run_eval(
     op_name: str,
 ) -> str:
     """Evaluate the transformer via eval_transformer (no subprocess)."""
-    print("\nRunning eval (Python)...")
-
     cleaned_mlir = clean_llm_output(transformer.solution_text)
     full_soln = merge_library_text(library.functions_text, cleaned_mlir)
 
@@ -164,7 +163,7 @@ def run_eval(
     )
 
 
-def run_single_synthesis_task(
+async def run_single_synthesis_task(
     task: SynthesisTask,
     round_num: int,
     library: LibraryState,
@@ -172,7 +171,8 @@ def run_single_synthesis_task(
     api_key: str,
 ) -> SynthesisResult:
     """Run one synthesis task with current library context."""
-    print(f"Synthesizing: round={round_num}, op={task.op_name}")
+    tag = f"[{task.op_name.upper()}]"
+    print(f"{tag} Synthesizing: round={round_num}, op={task.op_name}")
 
     op_lower = task.op_name.lower()
     # Xuanyu: make this a md file
@@ -200,9 +200,9 @@ def run_single_synthesis_task(
     )
 
     output_dir = Path(args.output)
-    print(f"Using model: {args.model}")
+    print(f"{tag} Using model: {args.model}")
     t0 = time.monotonic()
-    llm_output, run_result = run_agent_synthesis(
+    llm_output, run_result = await run_agent_synthesis(
         prompt,
         task.op_file,
         task.op_name,
@@ -216,28 +216,29 @@ def run_single_synthesis_task(
         instructions_path=args.agent_instructions,
     )
     synthesis_time = time.monotonic() - t0
-    print_token_usage(run_result)
+
     if args.dump_agent_run:
         dump_path = save_file(
             format_agent_run_dump(run_result),
             output_dir,
             f"synth_agent_r{round_num}_{task.op_name.lower()}.log",
         )
-        print(f"Agent run dump: {dump_path}")
-
+        print(f"{tag} Agent run dump: {dump_path}")
+    print_token_usage(run_result)
     transformer_file = save_file(
         clean_llm_output(llm_output),
         output_dir,
         f"kb_r{round_num}_{task.op_name.lower()}.mlir",
     )
-    print(f"Transformer: {transformer_file}")
+    print(f"{tag} Transformer: {transformer_file}")
 
     result = SynthesisResult(task, llm_output, transformer_file, None)
 
     eval_summary: str | None = None
     if not args.skip_eval:
+        print(f"{tag} Evaluating transformer...")
         eval_summary = run_eval(task.op_file, result, library, task.op_name)
-        print(f"Eval result:\n{eval_summary}")
+        print(f"{tag} Eval result: {eval_summary}")
         save_file(
             f"synthesis_time: {synthesis_time:.2f}s\n\n{eval_summary}",
             output_dir,
@@ -245,3 +246,28 @@ def run_single_synthesis_task(
         )
 
     return SynthesisResult(task, llm_output, transformer_file, eval_summary)
+
+
+async def run_synthesis_tasks(
+    tasks: list[SynthesisTask],
+    round_num: int,
+    library: LibraryState,
+    args,
+    api_key: str,
+) -> list[SynthesisResult]:
+    """Run synthesis tasks either in parallel or sequentially based on args.parallel."""
+    if args.parallel:
+        return list(
+            await asyncio.gather(
+                *[
+                    run_single_synthesis_task(t, round_num, library, args, api_key)
+                    for t in tasks
+                ]
+            )
+        )
+    results = []
+    for task in tasks:
+        results.append(
+            await run_single_synthesis_task(task, round_num, library, args, api_key)
+        )
+    return results

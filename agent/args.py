@@ -91,6 +91,11 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Number of library-update rounds; 0 = synthesis-only pass (default: 2)",
     )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run synthesis tasks in parallel within each round",
+    )
 
     args = parser.parse_args()
     _validate_args(parser, args)
