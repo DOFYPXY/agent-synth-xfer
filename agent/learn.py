@@ -105,6 +105,7 @@ def run_library_learn_task(
         previous_library.functions_text,
         clean_llm_output(llm_output),
     )
+    save_file(lib_text, output_dir, "library_current.mlir")
     library_file = save_file(lib_text, output_dir, f"library_v{version}.mlir")
     print(f"Library: {library_file}")
 

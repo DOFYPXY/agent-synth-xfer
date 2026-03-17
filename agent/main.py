@@ -2,12 +2,13 @@
 """Agent for synthesizing transfer functions using LLM via OpenAI Agent API."""
 
 import asyncio
+from pathlib import Path
 import sys
 
 from .args import parse_args
 from .compress import run_compress_task
 from .learn import run_library_learn_task
-from .synth import run_synthesis_tasks
+from .synth import SynthesisAgent, run_synthesis_tasks
 from .util import (
     LibraryState,
     SynthesisResult,
@@ -29,10 +30,23 @@ def run_library_learning_loop(
     library = initial_library
     latest_results: list[SynthesisResult] = []
 
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write initial library to disk so get_library_text() has a file on round 0.
+    current_lib_path = output_dir / "library_current.mlir"
+    current_lib_path.write_text(library.functions_text, encoding="utf-8")
+
+    # Create one persistent agent per task (agent + tools built once).
+    synth_agents = {
+        task.op_name: SynthesisAgent(task, args, api_key, current_lib_path)
+        for task in tasks
+    }
+
     # Round 0 is synthesis-only (single-shot equivalent).
     for round_idx in range(num_rounds + 1):
         latest_results = asyncio.run(
-            run_synthesis_tasks(tasks, round_idx, library, args, api_key)
+            run_synthesis_tasks(synth_agents, tasks, round_idx, library, args)
         )
         if round_idx < num_rounds:
             library = run_library_learn_task(
@@ -42,11 +56,12 @@ def run_library_learning_loop(
                 args=args,
                 api_key=api_key,
             )
-        new_results: list[SynthesisResult] = []
-        for result in latest_results:
-            new_result = run_compress_task(result, library, round_idx, args, api_key)
-            new_results.append(new_result)
-        latest_results = new_results
+        if not args.no_compress:
+            new_results: list[SynthesisResult] = []
+            for result in latest_results:
+                new_result = run_compress_task(result, library, round_idx, args, api_key)
+                new_results.append(new_result)
+            latest_results = new_results
     return library, latest_results
 
 
