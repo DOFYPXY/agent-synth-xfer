@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
 import itertools
 from pathlib import Path
 
@@ -17,6 +18,7 @@ class PatternHit:
     pattern_key: str
     total_matches: int
     matched_functions: dict[str, int]
+    utility: int  # inst_count * total_matches
 
 
 @dataclass
@@ -107,33 +109,60 @@ def _collect_opcode_signatures(program_dags: dict[str, DAG]) -> list[Opcode]:
     return sorted(seen, key=lambda s: (s.key, s.arity))
 
 
-def _count_pattern_matches(
+def _precompute_reachable_sizes(
+    program_dags: dict[str, DAG],
+) -> dict[str, dict[int, int]]:
+    """For each program DAG, map vertex id → number of vertices reachable from it."""
+    result: dict[str, dict[int, int]] = {}
+    for fn_name, dag in program_dags.items():
+        sizes: dict[int, int] = {}
+        for v in iter_vertices(dag.root):
+            sizes[id(v)] = len(iter_vertices(v))
+        result[fn_name] = sizes
+    return result
+
+
+def _get_matches(
     pattern: DAG, program_dags: dict[str, DAG]
-) -> tuple[int, dict[str, int]]:
-    matched_functions: dict[str, int] = {}
+) -> tuple[int, dict[str, int], dict[str, list[Vertex]]]:
+    """Return (total_matches, per_fn_counts, match_roots_by_fn)."""
     total = 0
+    per_fn: dict[str, int] = {}
+    roots_by_fn: dict[str, list[Vertex]] = {}
     for fn_name, prog in program_dags.items():
-        n = len(match(prog, pattern))
-        if n > 0:
-            matched_functions[fn_name] = n
-            total += n
-    return total, matched_functions
+        matched = match(prog, pattern)
+        if matched:
+            per_fn[fn_name] = len(matched)
+            roots_by_fn[fn_name] = matched
+            total += len(matched)
+    return total, per_fn, roots_by_fn
+
+
+def _upper_bound(
+    roots_by_fn: dict[str, list[Vertex]],
+    reachable_sizes: dict[str, dict[int, int]],
+) -> int:
+    """UB on utility for any extension: sum of reachable-set sizes over all match roots."""
+    return sum(
+        reachable_sizes[fn][id(r)] for fn, roots in roots_by_fn.items() for r in roots
+    )
 
 
 def search_patterns(paths: list[Path], max_instructions: int = 3) -> SearchResult:
-    """Top-down search with pruning over patterns with <= max_instructions.
+    """Branch-and-bound search for high-utility DAG patterns.
 
-    Starts from single-instruction patterns, then expands one leaf per step.
-    Each leaf can be replaced by a new instruction whose args are either fresh
-    wildcard leaves or existing non-ancestor nodes (enabling diamond DAG patterns).
-    A pattern is expanded only if it has >0 matches.
+    Utility = inst_count * total_matches.
+    Upper bound for any extension of pattern P:
+        UB(P) = sum_{r in match_roots(P)} |reachable_vertices(r)|
+    Branches are pruned when UB <= current best utility.
     """
-
     program_dags = _collect_program_dags(paths)
     op_sigs = _collect_opcode_signatures(program_dags)
+    reachable_sizes = _precompute_reachable_sizes(program_dags)
 
-    hits: list[PatternHit] = []
-    queue: list[DAG] = [
+    global_ub = sum(sum(sizes.values()) for sizes in reachable_sizes.values())
+
+    initial_patterns = [
         DAG(
             root=Vertex(
                 opcode=sig, args=[Vertex(opcode=Opcode.leaf()) for _ in range(sig.arity)]
@@ -141,33 +170,54 @@ def search_patterns(paths: list[Path], max_instructions: int = 3) -> SearchResul
         )
         for sig in op_sigs
     ]
-    seen: set[str] = set()
 
-    while queue:
-        pattern = queue.pop(0)
+    # heap entries: (-ub, tie_break, pattern)
+    counter = itertools.count()
+    heap: list[tuple[int, int, DAG]] = [
+        (-global_ub, next(counter), pat) for pat in initial_patterns
+    ]
+    heapq.heapify(heap)
+
+    hits: list[PatternHit] = []
+    seen: set[str] = set()
+    best_utility = 0
+
+    while heap:
+        neg_ub, _, pattern = heapq.heappop(heap)
+        ub = -neg_ub
+        if ub <= best_utility:
+            break  # heap property: all remaining entries have ub <= this
+
         key = _pattern_key(pattern.root)
         if key in seen:
             continue
         seen.add(key)
 
-        total, per_fn = _count_pattern_matches(pattern, program_dags)
+        total, per_fn, roots_by_fn = _get_matches(pattern, program_dags)
         if total == 0:
             continue
 
+        utility = pattern.inst_count * total
+        best_utility = max(best_utility, utility)
         hits.append(
             PatternHit(
                 pattern=pattern,
                 pattern_key=key,
                 total_matches=total,
                 matched_functions=per_fn,
+                utility=utility,
             )
         )
 
         if pattern.inst_count >= max_instructions:
             continue
 
-        for expanded in _expand_pattern(pattern, op_sigs):
-            queue.append(expanded)
+        child_ub = _upper_bound(roots_by_fn, reachable_sizes)
+        if child_ub <= best_utility:
+            continue
 
-    hits.sort(key=lambda h: (-h.total_matches, h.pattern_key))
+        for child in _expand_pattern(pattern, op_sigs):
+            heapq.heappush(heap, (-child_ub, next(counter), child))
+
+    hits.sort(key=lambda h: (-h.utility, h.pattern_key))
     return SearchResult(op_sigs=op_sigs, hits=hits)
