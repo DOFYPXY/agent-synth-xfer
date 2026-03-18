@@ -43,6 +43,7 @@ enum = "synth_xfer.cli.enum:main"
 max-precise = "synth_xfer.cli.max_precise:main"
 agent-synth = "agent.main:main"
 agent-learn = "agent.learn:main"
+stitch-match = "agent.stitch.match:main"
 
 [tool.scikit-build]
 minimum-version = "0.11"
@@ -56,8 +57,8 @@ CMAKE_C_COMPILER = "clang"
 CMAKE_CXX_COMPILER = "clang++"
 SYNTH_XFER_DOMAINS = [
   "knownbits",
-  "uconst_range",
-  "sconst_range",
+  # "uconst_range",
+  # "sconst_range",
   # "mod3",
   # "mod5",
   # "mod7",

@@ -48,3 +48,21 @@ def match(prog: DAG, pattern: DAG) -> list[Vertex]:
             matches.append(candidate)
 
     return matches
+
+
+def match_with_bindings(prog: DAG, pattern: DAG) -> list[dict[int, Vertex]]:
+    """Return one bindings dict per match.
+
+    Each dict maps id(pattern_vertex) -> program_vertex for every non-leaf
+    pattern vertex, i.e. the program ops directly involved in the match.
+    """
+    pattern_vertices = iter_vertices(pattern.root)
+    non_leaf_ids = {id(v) for v in pattern_vertices if not _is_leaf(v)}
+
+    result: list[dict[int, Vertex]] = []
+    for candidate in iter_vertices(prog.root):
+        bindings: dict[int, Vertex] = {}
+        if _match_vertex(candidate, pattern.root, bindings):
+            result.append({k: v for k, v in bindings.items() if k in non_leaf_ids})
+
+    return result
