@@ -59,7 +59,7 @@ sxf --op mlir/Operations/And.mlir \
     --num-iters 2                 \
     --num-steps 100               \
     --num-mcmc 50                 \
-    --random-seed 2333
+    --seed 2333
 ```
 
 Output:
@@ -96,7 +96,7 @@ sxf --op mlir/Operations/Add.mlir     \
 | `--op <path>`                    | Path to a concrete operation or pattern (`.mlir` file) to synthesize an abstract transformer for.                                                                                    |
 | `--benchmark <path>`             | Path to a benchmark YAML file. Runs multiple synthesis jobs in parallel using the per-domain, per-arity settings from the file.                                                      |
 | `-o <path>`                      | Output directory where synthesized results and intermediate outputs will be written.                                                                                                 |
-| `--random-seed <int>`            | Seed for the random number generator to make runs reproducible.                                                                                                                      |
+| `--seed <int>`                   | Seed for the random number generator to make runs reproducible.                                                                                                                      |
 | `--domain <Name>`                | Abstract domain to evaluate (e.g., `KnownBits`, `UConstRange`, `SConstRange`).                                                                                                       |
 | `--num-iters <int>`              | Number of iterations for the synthesizer (default: `10`).                                                                                                                            |
 | `--num-steps <int>`              | Number of mutation steps in one iteration (default: `1500`).                                                                                                                         |
@@ -216,19 +216,21 @@ Norm bw:  (64, 5000, 5000)
 
 ## Important CLI Options for `simplifier`
 
-| CLI flag                 | Description                                                                                                      |
-|--------------------------|------------------------------------------------------------------------------------------------------------------|
-| `<input_path>`           | Path to a transformer `.mlir` file. Accepts a single function or a module (defaults to the `solution` function). |
-| `--rewrite-meet`         | Rewrite the meet of all rewritten functions instead of individual functions.                                     |
-| `--quiet` / `--no-quiet` | Suppress or enable console output from the optimizer (default: quiet).                                           |
+| CLI flag         | Description                                                                                                      |
+|------------------|------------------------------------------------------------------------------------------------------------------|
+| `<input_path>`   | Path to a transformer `.mlir` file. Accepts a single function or a module (defaults to the `solution` function). |
+| `--rewrite-meet` | Rewrite the meet of all rewritten functions instead of individual functions.                                     |
+| `--quiet`        | Suppress or enable console output from the optimizer (default: quiet).                                           |
 
 ## Important CLI Options for `max-precise`
 
-Example usage: `max-precise ./mlir/Operations/Or.mlir --domain KnownBits --args "00??,11??" --bitwidth=4`
+Example usage: `max-precise --op mlir/Operations/Or.mlir -d KnownBits --args "00??,11??" --bw 4`
 
-| CLI flag       | Description                                                                                                      |
-|----------------|------------------------------------------------------------------------------------------------------------------|
-| `<input_path>` | Path to a transformer `.mlir` file. Accepts a single function or a module (defaults to the `solution` function). |
-| `--args`       | The string representation of abstract value inputs. It only supports KnownBits for now                           |
-| `--bitwidth`   | The bitwidth of `args`                                                                                           |
-| `--domain`     | The domain                                                                                                       |
+| CLI flag    | Description                                            |
+|-------------|--------------------------------------------------------|
+| `--op`      | Path to a concrete operation or pattern (`.mlir` file) |
+| `--args`    | The string representation of abstract value inputs.    |
+| `--bw`      | The bitwidth of the arguments                          |
+| `--domain`  | The domain (only KnownBits is implemented now)         |
+| `--timeout` | Timeout in seconds                                     |
+| `--input`   | Takes an enum `.tsv`, and will sovle all `hbw` rows    |
