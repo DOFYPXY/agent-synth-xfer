@@ -74,59 +74,57 @@ def extract_op_name(op_file_path: str) -> str:
     return Path(op_file_path).stem
 
 
+def _parse_library_function(text: str) -> LibraryFunction | None:
+    """Parse a single func.func definition from text. Returns None if not found."""
+    func_pattern = re.compile(r"func\.func\s+@(\w+)\s*\(")
+    match = func_pattern.search(text)
+    if not match:
+        return None
+
+    func_name = match.group(1)
+
+    brace_pos = text.find("{", match.end())
+    if brace_pos == -1:
+        raise ValueError(f"Ill-formed MLIR: no opening brace for function '{func_name}'")
+
+    depth = 1
+    i = brace_pos + 1
+    while i < len(text) and depth > 0:
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+        i += 1
+
+    if depth != 0:
+        raise ValueError(f"Ill-formed MLIR: unmatched braces in function '{func_name}'")
+
+    source = text[match.start() : i].strip()
+
+    docstring = ""
+    body = text[brace_pos + 1 : i - 1]
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            docstring = stripped[2:].strip()
+            break
+
+    return LibraryFunction(function_name=func_name, docstring=docstring, source=source)
+
+
 def load_initial_library(library_dir: Path | None) -> LibraryState:
     """Load initial library text for round 0."""
 
     if library_dir is None:
         return LibraryState(functions=[])
 
-    text = "builtin.module {}"
-    for entry in library_dir.iterdir():
-        text = merge_library_text(text, entry.read_text())
-
-    func_pattern = re.compile(r"func\.func\s+@(\w+)\s*\(")
     functions = []
-
-    for match in func_pattern.finditer(text):
-        func_name = match.group(1)
-
-        brace_pos = text.find("{", match.end())
-        if brace_pos == -1:
-            raise ValueError(
-                f"Ill-formed MLIR: no opening brace for function '{func_name}'"
-            )
-
-        depth = 1
-        i = brace_pos + 1
-        while i < len(text) and depth > 0:
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-            i += 1
-
-        if depth != 0:
-            raise ValueError(
-                f"Ill-formed MLIR: unmatched braces in function '{func_name}'"
-            )
-
-        source = text[match.start() : i].strip()
-
-        docstring = ""
-        body = text[brace_pos + 1 : i - 1]
-        for line in body.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("//"):
-                docstring = stripped[2:].strip()
-                break
-
-        functions.append(
-            LibraryFunction(
-                function_name=func_name,
-                docstring=docstring,
-                source=source,
-            )
-        )
+    for entry in sorted(library_dir.iterdir()):
+        if not entry.is_file():
+            continue
+        func = _parse_library_function(entry.read_text())
+        if func is not None:
+            functions.append(func)
 
     return LibraryState(functions=functions)
 
