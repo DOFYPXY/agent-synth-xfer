@@ -1,6 +1,6 @@
 """File compression workflow helpers."""
-import json
 
+import json
 from pathlib import Path
 import re
 
@@ -46,9 +46,7 @@ def _run_agent_compress(
     @function_tool
     def list_library_functions() -> str:
         """List available library functions as JSON dictionary of func names and docstrings"""
-        funcs = {
-            func.function_name: func.docstring for func in library.functions
-        }
+        funcs = {func.function_name: func.docstring for func in library.functions}
         return json.dumps(funcs)
 
     @function_tool
