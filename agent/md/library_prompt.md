@@ -5,7 +5,7 @@ You are given a set of synthesized KnownBits transfer functions. Your goal is to
 Use tools to fetch all materials; do not assume they are in this message:
 - `get_corpus_functions()`: the synthesized transfer functions to learn from
 - `get_available_primitives()`: the allowed primitive operators
-- `get_library_text()`: the existing library (do not duplicate functions already present)
+- `list_library_functions()/search_library_functions()/get_library_function()`: search and retrieve the existing library (do not duplicate functions already present)
 
 ## Background: KnownBits representation
 
@@ -50,7 +50,7 @@ Example output shape (illustrative, do not copy verbatim):
 ## Required workflow
 
 1. Call `get_corpus_functions()` to read the synthesized transfer functions. For each one, annotate (mentally) which sub-sequences of operations compute a semantically coherent intermediate result.
-2. Call `get_library_text()` to see what helpers already exist — do not re-emit anything already present or trivially equivalent.
+2. Call `list_library_functions()/search_library_functions()/get_library_function()` to search and retrieve pre-existing helpers — do not re-emit anything already present or trivially equivalent.
 3. Call `get_available_primitives()` to confirm which operations are allowed.
 4. Look for sub-computations that appear in more than one function, or that are large enough to deserve a name on their own.
 5. For each candidate, decide on a precise semantic description and a clear name.

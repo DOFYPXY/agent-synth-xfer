@@ -4,7 +4,7 @@ You are given an MLIR transfer function to compress. Your goal is to replace inl
 
 Use tools to fetch all materials; do not assume they are in this message:
 - `get_target_file()`: the MLIR transfer function to compress
-- `get_library_text()`: the available helper functions you may call
+- `list_library_functions()/search_library_functions()/get_library_function()`: find the available helper functions that you may call
 - `get_available_primitives()`: the allowed primitive operators
 - `verify_correctness(mlir)`: confirm your compressed version is semantically equivalent
 
@@ -20,7 +20,7 @@ Use tools to fetch all materials; do not assume they are in this message:
 ## Required workflow
 
 1. Call `get_target_file()` to read the transfer function to compress.
-2. Call `get_library_text()` to see what helper functions are available.
+2. Call `list_library_functions()/search_library_functions()/get_library_function()` to search and retrieve available helper functions.
 3. For each library function, check whether any sub-sequence in the target computes the same result with the same operands.
 4. For each valid match, replace the sub-sequence with a call to the library function, threading the result SSA value through the rest of the function.
 5. Call `verify_correctness(mlir)` with your compressed function to confirm it is semantically equivalent to the original.

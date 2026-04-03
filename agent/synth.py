@@ -89,9 +89,44 @@ class SynthesisAgent:
             return ops_path.read_text(encoding="utf-8")
 
         @function_tool
-        def get_library_text() -> str:
-            """Return the library (in MLIR) containing reusable helper functions mined from previous synthesis rounds. Prefer calling these functions in your solution to keep the program short."""
-            return "\n".join(func.source for func in self._library.functions)
+        def list_library_functions() -> str:
+            """List available library functions as JSON dictionary of func names and docstrings"""
+            funcs = {
+                func.function_name: func.docstring for func in self._library.functions
+            }
+            return json.dumps(funcs)
+
+        @function_tool
+        def get_library_function(name: str) -> str:
+            """Return the source of a function by its name"""
+            for func in self._library.functions:
+                if func.function_name == name:
+                    return func.source
+
+            raise ValueError("name must refer to a function in the library")
+
+        @function_tool
+        def search_library_functions(query: str, top_k: int = 3) -> str:
+            """Search library functions by substring. Returns JSON array of matches with function name and docstring."""
+            if top_k <= 0:
+                return "[]"
+            q = query.strip()
+            if not q:
+                return "[]"
+            matches: list[dict] = []
+            for func in self._library.functions:
+                searchable = f"{func.function_name}\n{func.docstring}\n{func.source}"
+                if searchable.lower().find(q.lower()) == -1:
+                    continue
+                matches.append(
+                    {
+                        "function_name": func.function_name,
+                        "docstring": func.docstring,
+                    }
+                )
+                if len(matches) >= top_k:
+                    break
+            return json.dumps(matches)
 
         @function_tool
         def list_examples() -> str:
@@ -171,7 +206,9 @@ class SynthesisAgent:
                 get_task_bundle,
                 get_program_templates,
                 get_available_primitives,
-                get_library_text,
+                list_library_functions,
+                get_library_function,
+                search_library_functions,
                 list_examples,
                 get_example,
                 search_examples,
@@ -187,8 +224,10 @@ class SynthesisAgent:
         else:
             user_content = (
                 f"The library has been updated for round {round_num}. "
-                "Call get_library_text() to see the new helper functions, "
-                "then revise your solution to reuse them where applicable."
+                "Call list_library_functions()/search_library_functions()/"
+                "get_library_function() to search and retrieve the new helper "
+                "functions, then revise your solution to reuse them where "
+                "applicable."
             )
         user_content += f"\nYou have a maximum of {self._args.max_turns} iterations to complete this task, If you are going to exceed the limit, return the current MLIR you have generated."
         inp: list[Any] = (self._history or []) + [

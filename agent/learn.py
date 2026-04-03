@@ -1,6 +1,7 @@
 """Library learning workflow helpers."""
 
 import argparse
+import json
 from pathlib import Path
 
 from agents import Agent, Runner, function_tool
@@ -43,9 +44,44 @@ def _run_agent_learn(
         return ops_path.read_text(encoding="utf-8")
 
     @function_tool
-    def get_library_text() -> str:
-        """Return the library (in MLIR) containing reusable helper functions mined from previous synthesis rounds. Prefer calling these functions in your solution to keep the program short."""
-        return previous_library.functions_text
+    def list_library_functions() -> str:
+        """List available library functions as JSON dictionary of func names and docstrings"""
+        funcs = {
+            func.function_name: func.docstring for func in previous_library.functions
+        }
+        return json.dumps(funcs)
+
+    @function_tool
+    def get_library_function(name: str) -> str:
+        """Return the source of a function by its name"""
+        for func in previous_library.functions:
+            if func.function_name == name:
+                return func.source
+
+        raise ValueError("name must refer to a function in the library")
+
+    @function_tool
+    def search_library_functions(query: str, top_k: int = 3) -> str:
+        """Search library functions by substring. Returns JSON array of matches with function name and docstring."""
+        if top_k <= 0:
+            return "[]"
+        q = query.strip()
+        if not q:
+            return "[]"
+        matches: list[dict] = []
+        for func in previous_library.functions:
+            searchable = f"{func.function_name}\n{func.docstring}\n{func.source}"
+            if searchable.lower().find(q.lower()) == -1:
+                continue
+            matches.append(
+                {
+                    "function_name": func.function_name,
+                    "docstring": func.docstring,
+                }
+            )
+            if len(matches) >= top_k:
+                break
+        return json.dumps(matches)
 
     agent = Agent(
         name="LibraryFunctionLearner",
@@ -53,7 +89,9 @@ def _run_agent_learn(
         tools=[
             get_corpus_functions,
             get_available_primitives,
-            get_library_text,
+            list_library_functions,
+            get_library_function,
+            search_library_functions,
         ],
         model=model,
         output_type=LibraryState,
