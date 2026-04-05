@@ -107,7 +107,7 @@ class SynthesisAgent:
 
         @function_tool
         def search_library_functions(query: str, top_k: int = 3) -> str:
-            """Search library functions by substring. Returns JSON array of matches with function name and docstring."""
+            """Search inside library functions by substring 'query' to understand how specific operators are used. Returns JSON array of matches with function name and docstring."""
             if top_k <= 0:
                 return "[]"
             q = query.strip()
@@ -153,7 +153,7 @@ class SynthesisAgent:
 
         @function_tool
         def search_examples(query: str, top_k: int = 3) -> str:
-            """Search example transformer files by substring. Returns JSON array of matches with filename and snippet."""
+            """Search inside reference implementations by substring 'query' to understand the usage of operators. Returns JSON array of matches with filename and snippet."""
             if top_k <= 0:
                 return "[]"
             q = query.strip()
