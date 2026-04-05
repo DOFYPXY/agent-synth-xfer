@@ -3,6 +3,19 @@
 import argparse
 from pathlib import Path
 
+import yaml
+
+
+def _load_ops_from_bench(bench_path: Path) -> list[str]:
+    """Parse bench.yaml and return list of MLIR op file paths."""
+    with bench_path.open() as f:
+        data = yaml.safe_load(f)
+    ops = []
+    for _domain, cfg in data.items():
+        for op_name in cfg.get("concrete_ops", []):
+            ops.append(str(Path("mlir/Operations") / f"{op_name}.mlir"))
+    return ops
+
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     for name, path in [
@@ -23,6 +36,16 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.library_dir is not None and not args.library_dir.is_dir():
         parser.error(f"--library-dir: not a directory: {args.library_dir}")
 
+    if args.benchmark is not None and args.op_file:
+        parser.error("op_file and --benchmark are mutually exclusive")
+    if args.benchmark is None and not args.op_file:
+        parser.error("provide op_file or --benchmark")
+
+    if args.benchmark is not None:
+        if not args.benchmark.exists():
+            parser.error(f"--benchmark: path does not exist: {args.benchmark}")
+        args.op_file = _load_ops_from_bench(args.benchmark)
+
     for op_file in args.op_file:
         if not Path(op_file).exists():
             parser.error(f"op_file: path does not exist: {op_file}")
@@ -36,8 +59,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Synthesize transfer functions")
     parser.add_argument(
         "op_file",
-        nargs="+",
+        nargs="*",
         help="Operation MLIR file(s) (e.g., mlir/Operations/Add.mlir)",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=Path,
+        default=None,
+        metavar="YAML",
+        help="Path to bench.yaml specifying ops per domain (mutually exclusive with op_file)",
     )
     parser.add_argument(
         "-o", "--output", default="outputs/agent", help="Output directory"

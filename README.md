@@ -184,11 +184,29 @@ You can omit `--dump-agent-run` if you don't need the full run dump.
 
 | Option | Description |
 |--------|-------------|
-| `op_file` | Operation MLIR file (e.g. `mlir/Operations/Add.mlir`). |
+| `op_file` | Operation MLIR file(s) (e.g. `mlir/Operations/And.mlir mlir/Operations/Or.mlir`). Mutually exclusive with `--benchmark`. |
+| `--benchmark` | Path to a `bench.yaml` file specifying ops per domain (see below). Mutually exclusive with `op_file`. |
 | `-o, --output` | Output directory (default: `outputs/agent`). |
 | `--model` | OpenAI model (default: `gpt-4`). See [OpenAI pricing](https://developers.openai.com/api/docs/pricing). |
 | `--skip-eval` | Skip running eval-final after synthesis. |
 | `--dump-agent-run` | Write a full dump of the agent run (messages, tool calls, token usage) to the output dir. |
+
+**Using `--benchmark` with a `bench.yaml` file:**
+
+Instead of listing MLIR files on the command line, you can specify operations in a YAML file:
+
+```yaml
+# bench.yaml
+KnownBits:
+  concrete_ops: [And, Or]
+```
+
+Then run:
+```bash
+agent-synth --benchmark bench.yaml -o outputs/test-lib/ --model gpt-5.1-codex-mini --dump-agent-run --rounds 2
+```
+
+Op names in `concrete_ops` are resolved to `mlir/Operations/{Name}.mlir` relative to the project root.
 
 Each run prints the **model** in use and **token usage** (input/output/reasoning and total). The agent is prompted to reason about the operation and KnownBits before writing MLIR and to use multiple turns to improve quality rather than stopping at the first candidate that passes eval.
 ## Important CLI Options for `simplifier`
