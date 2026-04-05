@@ -129,17 +129,6 @@ def load_initial_library(library_dir: Path | None) -> LibraryState:
     return LibraryState(functions=functions)
 
 
-def read_prompt_template() -> str:
-    """Read prompt template, removing HTML comments (<!-- -->)."""
-    content = (Path(__file__).parent / "prompt.md").read_text()
-    return re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL).strip()
-
-
-def read_op_file(op_file_path: str) -> str:
-    """Read operation MLIR file."""
-    return Path(op_file_path).read_text()
-
-
 def clean_llm_output(output: str) -> str:
     """Extract MLIR code from LLM output, removing markdown blocks."""
     for fence in ["```mlir", "```"]:
