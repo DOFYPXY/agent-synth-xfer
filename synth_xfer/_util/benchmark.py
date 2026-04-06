@@ -5,6 +5,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any
 
+from setproctitle import setproctitle
 import yaml
 
 from synth_xfer._util.domain import AbstractDomain
@@ -25,15 +26,34 @@ class BenchmarkInput:
     hbw: list[tuple[int, int, int]]
 
 
-def _prepare_output_dir(output_dir: Path, *, allow_existing: bool) -> None:
-    if output_dir.exists():
+def _prepare_output_dir(output_dir: Path, allow_existing: bool) -> None:
+    try:
+        output_dir.mkdir(parents=True, exist_ok=allow_existing)
+    except FileExistsError:
         if not output_dir.is_dir():
             raise FileExistsError(f'Output path "{output_dir}" already exists.')
         if not allow_existing:
             raise FileExistsError(f'Output folder "{output_dir}" already exists.')
-        return
 
-    output_dir.mkdir(parents=True, exist_ok=False)
+
+def _benchmark_output_folder(base_output: Path, bench: BenchmarkInput) -> Path:
+    return base_output / f"{bench.domain}_{bench.name}"
+
+
+def _validate_unique_output_folders(
+    benchmark: list[BenchmarkInput], base_output: Path
+) -> None:
+    seen: dict[Path, BenchmarkInput] = {}
+    for bench in benchmark:
+        output_folder = _benchmark_output_folder(base_output, bench)
+        prev = seen.get(output_folder)
+        if prev is not None:
+            raise ValueError(
+                "Benchmark config produces duplicate output folder "
+                f'"{output_folder}" for {prev.domain} {prev.name} and '
+                f"{bench.domain} {bench.name}"
+            )
+        seen[output_folder] = bench
 
 
 def _resolve_benchmark_input(name: str) -> Path:
@@ -120,7 +140,6 @@ def _execute_job(
     bench: BenchmarkInput,
     args: Namespace,
     output_folder: Path,
-    *,
     allow_existing: bool,
 ) -> dict[str, Any]:
     sampler = get_sampler(args)
@@ -168,7 +187,6 @@ def _execute_job(
             "Domain": str(bench.domain),
             "Function": bench.name,
             "Arity": bench.arity,
-            "Transfer Function": str(bench.op_path),
             "lbw": bench.lbw,
             "mbw": [list(item) for item in bench.mbw],
             "hbw": [list(item) for item in bench.hbw],
@@ -181,27 +199,36 @@ def _execute_job(
                 }
                 for per_bit_res in res.per_bit_res
             ],
+            "Success": True,
         }
     except Exception as e:
+        if isinstance(e, ZeroDivisionError):
+            e = "Top coincides with ideal transformer"
         return {
             "Domain": str(bench.domain),
             "Function": bench.name,
             "Arity": bench.arity,
-            "Transfer Function": str(bench.op_path),
-            "Notes": f"Run was terminated: {e}",
+            "Success": False,
+            "Termanation Error": str(e),
         }
 
 
 def _execute_benchmark_job(x: tuple[BenchmarkInput, Namespace]) -> dict[str, Any]:
-    bench = x[0]
-    args = x[1]
+    bench, args = x
     assert args.output is not None
-    return _execute_job(
-        bench,
-        args,
-        args.output / f"{bench.domain}_{bench.name}",
-        allow_existing=False,
-    )
+
+    proc_name = f"sxf:{bench.domain} {bench.name}"
+    setproctitle(proc_name)
+
+    try:
+        return _execute_job(
+            bench,
+            args,
+            _benchmark_output_folder(args.output, bench),
+            allow_existing=False,
+        )
+    finally:
+        setproctitle("sxf:idle")
 
 
 def run_single_synth(args: Namespace) -> None:
@@ -227,7 +254,9 @@ def run_single_synth(args: Namespace) -> None:
         else Path(args.output)
     )
 
-    _execute_job(bench, args, output_folder, allow_existing=True)
+    ret = _execute_job(bench, args, output_folder, allow_existing=True)
+    if not ret["Success"]:
+        print(f"Error: {ret['Termanation Error']}")
 
 
 def run_benchmark(args: Namespace) -> None:
@@ -238,10 +267,8 @@ def run_benchmark(args: Namespace) -> None:
         raise ValueError("No benchmark selected to eval")
 
     args.output = Path("outputs") if args.output is None else Path(args.output)
-    if not args.output.exists():
-        args.output.mkdir(parents=True, exist_ok=True)
-    else:
-        raise FileExistsError(f'Output folder "{args.output}" already exists.')
+    _prepare_output_dir(args.output, allow_existing=False)
+    _validate_unique_output_folders(benchmark, args.output)
 
     with Pool() as p:
         data = p.map(_execute_benchmark_job, [(bench, args) for bench in benchmark])

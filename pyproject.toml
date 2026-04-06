@@ -12,28 +12,29 @@ version = "0.0.0"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+  "cloudpickle>=3.1.2",
+  "egglog>=1.0.0",
+  "llvmlite==0.44.0",
+  "pandas>=2.3.3",
+  "PyYAML>=6.0.3",
+  "setproctitle==1.3.7",
   "xdsl>=0.48.3",
   "xdsl-smt @ https://github.com/dominicmkennedy/xdsl-smt/archive/2fd76eb.tar.gz",
   "z3-solver==4.15.1.0",
-  "llvmlite==0.44.0",
-  "pandas>=2.3.3",
-  "egglog>=1.0.0",
-  "cloudpickle>=3.1.2",
-  "PyYAML>=6.0.3",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "pre-commit>=4.5",
+  "pyright>=1.1",
   "pytest>=9",
   "ruff>=0.15",
-  "pyright>=1.1",
-  "pre-commit>=4.5",
 ]
 
 [project.scripts]
 sxf = "synth_xfer.cli.sxf:main"
-eval-final = "synth_xfer.cli.eval_final:main"
 run-xfer = "synth_xfer.cli.run_xfer:main"
+eval-xfer = "synth_xfer.cli.eval_xfer:main"
 verify = "synth_xfer.cli.verify:main"
 lower-to-llvm = "synth_xfer.cli.lower_to_llvm:main"
 simplifier = "synth_xfer.cli.simplifier:main"
@@ -56,10 +57,10 @@ SYNTH_XFER_DOMAINS = [
   "uconst_range",
   "sconst_range",
   "mod3",
-  "mod5",
-  "mod7",
-  "mod11",
-  "mod13",
+  # "mod5",
+  # "mod7",
+  # "mod11",
+  # "mod13",
 ]
 SYNTH_XFER_ARITIES = ["1", "2", "3", "4", "5"]
 SYNTH_XFER_WIDTHS = [

@@ -38,8 +38,8 @@ these executables depend on paths in the repo the should be run from the project
 | Executable      | Description                                                                                               |
 |-----------------|-----------------------------------------------------------------------------------------------------------|
 | `sxf`           | Given either a concrete function or a benchmark config, synthesizes abstract transformers (the main tool) |
-| `eval-final`    | Measures the precision of a previously synthesized transformer                                            |
-| `run-xfer`      | Runs a synthesized transformer on explicit inputs or evaluation datasets                                  |
+| `run-xfer`      | Runs synthesized transformer(s) on explicit inputs from stdin or enum TSV datasets                        |
+| `eval-xfer`     | Evaluates synthesized transformer(s) against enum TSV datasets or generate workloads                      |
 | `verify`        | Checks the soundness of a previously synthesized transformer                                              |
 | `lower-to-llvm` | Lowers a synthesized transformer from MLIR to LLVM IR                                                     |
 | `simplifier`    | Applies a peephole optimizer to simplify synthesized transformer code                                     |
@@ -184,35 +184,141 @@ Should produce:
 32 bits | sound   | took 0.0282s
 ```
 
-## Important CLI Options for `eval-final`
+## Important CLI Options for `run-xfer`
 
-| CLI flag              | Description                                                                                                                                         |
-|-----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `<input_path>`        | Path to a solutions directory (with `config.log`) or a single transformer `.mlir` file.                                                             |
-| `--domain <Name>`     | Abstract domain (required only when `<input_path>` is a single transformer file).                                                                   |
-| `--op <Path>`         | Path to the concrete operation (`.mlir` file) (required only when `<input_path>` is a single transformer file).                                     |
-| `--xfer-name <str>`   | Name of the transformer function to evaluate (defaults to `solution`, or the only function in the file if there's just one).                        |
-| `--exact-bw <tuple>`  | Bitwidth for exact percent reporting. Accepts `bw` or `bw,num_samples` (e.g. `4`, or `8,5000`).                                                     |
-| `--norm-bw <tuple>`   | Bitwidth for norm score reporting. Accepts `bw`, `bw,num_samples`, or `bw,num_abs_samples,num_conc_samples` (e.g. `4`, `8,5000` or `64,5000,5000`). |
-| `-o, --output <Path>` | Write results as CSV to the given path.                                                                                                             |
+| CLI flag              | Description                                                                                                                 |
+|-----------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `--xfer-file <Path>`  | One or more transformer `.mlir` files.                                                                                      |
+| `--xfer-name <str>`   | Name of the transformer function to evaluate (defaults to `solution`, or the only function in the file if there's just one) |
+| `-i, --input <Path>`  | Existing enum TSV dataset. If omitted, `run-xfer` reads a TSV from stdin.                                                   |
+| `--bw <int>`          | Bitwidth for stdin apply mode. Required when `--input` is omitted.                                                          |
+| `--domain <Name>`     | Abstract domain for stdin apply mode. Required when `--input` is omitted.                                                   |
+| `-o, --output <Path>` | Write the resulting table as TSV.                                                                                           |
 
-For example:
+Example invocation:
 ```bash
-eval-final tests/data/kb_and.mlir        \
-           --domain KnownBits            \
-           --op mlir/Operations/And.mlir \
-           --exact-bw 8,5000             \
-           --norm-bw 64,5000,5000
-```
-Should produce:
-```
-Exact bw: (8, 5000)
-Norm bw:  (64, 5000, 5000)
-      Domain   Op  Top Exact %  Synth Exact %  Top Norm  Synth Norm
-0  KnownBits  And         4.02          100.0   2494.34           0
+run-xfer --xfer-file tests/data/kb_and.mlir --bw 4 --domain KnownBits
 ```
 
-(With small differences due to RNG).
+## Important CLI Options for `eval-xfer`
+
+| CLI flag                | Description                                                                                                                 |
+|-------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `--xfer-file <Path>`    | One or more transformer `.mlir` files. Mutually exclusive with `--solution-dir`.                                            |
+| `--solution-dir <Path>` | Path to an `sxf` solution directory containing `solution.mlir` files and `config.log` metadata. Generated mode only.        |
+| `--xfer-name <str>`     | Name of the transformer function to evaluate for `--xfer-file` inputs. Not allowed with `--solution-dir`.                   |
+| `-i, --input <Path>`    | Existing enum TSV dataset to evaluate against. Dataset mode only. Cannot be combined with `--solution-dir`.                 |
+| `--domain <Name>`       | Abstract domain for generated eval with `--xfer-file`. Required when `--input` is omitted and `--solution-dir` is not used. |
+| `--op <Path>`           | Concrete operation used to generate an eval workload on the fly for `--xfer-file`. Required in generated mode.              |
+| `--exact-bw`            | Exact-scoring workload. Accepts `bw` or `bw,samples`. Default: `8,1000`.                                                    |
+| `--dist-bw`             | Distance-scoring workload. Accepts `bw`, `bw,samples`, or `bw,lat_samples,crt_samples`. Default: `64,1000,100000`.          |
+| `-o, --output <Path>`   | Write the evaluation table as CSV.                                                                                          |
+
+Generated eval from explicit transformer files:
+```bash
+eval-xfer --xfer-file tests/data/kb_and.mlir tests/data/kb_or.mlir \
+          --domain KnownBits                                       \
+          --op mlir/Operations/And.mlir                            \
+          --exact-bw 8,1000                                        \
+          --dist-bw 64,1000,100000
+```
+
+Dataset eval:
+```bash
+eval-xfer --xfer-file tests/data/kb_and.mlir \
+          --input generated_from_enum.tsv
+```
+
+Generated eval from an `sxf` solution directory:
+```bash
+eval-xfer --solution-dir outputs/ \
+```
+
+## Important CLI Options for `pattern`
+
+The `pattern` executable provides four subcommands:
+
+| Subcommand                | Purpose                                                                       |
+|---------------------------|-------------------------------------------------------------------------------|
+| `pattern analyze`         | Determine SSA reuse and if the composite and sequential transformers coincide |
+| `pattern make-sequential` | Make a sequential transformer out of the synthesized mlir operations          |
+| `pattern generate-input`  | Generate abstract inputs for patterns, mined LLVM's seen abstract inputs      |
+| `pattern eval`            | Evaluate a composite and sequential transformer                               |
+
+### `pattern analyze`
+
+| CLI flag          | Description                                |
+|-------------------|--------------------------------------------|
+| `--pattern <Path>`| Pattern MLIR file to analyze.              |
+| `--domain <Name>` | Abstract domain to analyze the pattern in. |
+
+Example:
+```bash
+pattern analyze --pattern mlir/Patterns/008.mlir --domain KnownBits
+```
+
+### `pattern make-sequential`
+
+| CLI flag              | Description                                                                                                 |
+|-----------------------|-------------------------------------------------------------------------------------------------------------|
+| `--pattern <Path>`    | Pattern MLIR file to lower into a sequential transformer.                                                   |
+| `--domain <Name>`     | Abstract domain to build the sequential transformer in.                                                     |
+| `--xfer-dir <Path>`   | Directory containing synthesized component-op solutions (expects the same format as a benchmark output dir) |
+| `-o, --output <Path>` | Output MLIR file for the sequential transformer.                                                            |
+
+Example:
+```bash
+pattern make-sequential \
+  --pattern mlir/Patterns/008.mlir \
+  --domain KnownBits \
+  --xfer-dir outputs \
+  -o pattern_008_seq.mlir
+```
+
+### `pattern generate-input`
+
+| CLI flag                   | Description                                                                                     |
+|----------------------------|-------------------------------------------------------------------------------------------------|
+| `--pattern <Path>`         | Pattern MLIR file to generate inputs for.                                                       |
+| `--domain <Name>`          | Abstract domain to generate inputs in.                                                          |
+| `--mbw <bw,samples>`       | Bitwidth/sample-count pairs to sample that compute the ideal abstract output with `max-precise` |
+| `--hbw <bw,samples>`       | Bitwidth/sample-count pairs to sample but not compute the ideal value                           |
+| `--data-dir <Path>`        | Directory containing per-domain input TSVs used for sampling.                                   |
+| `--sampling-alpha <Float>` | Exponent applied to `count` before weighted row sampling. Default `0.70`                        |
+| `--weight-beta <Float>`    | Exponent applied to the proposal probability when emitting row weights. Default `0.15`          |
+| `--timeout <int>`          | Per-row ideal-computation timeout in seconds for `--mbw` rows.                                  |
+| `--max-failures <int>`     | Max consecutive duplicate/timeout rejections before failing. Default `1000`.                    |
+| `-o, --output <Path>`      | Output enum TSV.                                                                                |
+
+Example (This command may take several minutes or more depending on the size of `mbw`):
+```bash
+pattern generate-input             \
+  --pattern mlir/Patterns/008.mlir \
+  --domain KnownBits               \
+  --mbw 8,10000                    \
+  --hbw 64,10000                   \
+  --data-dir notes/input_data      \
+  -o pattern_008_enum_data.tsv
+```
+
+### `pattern eval`
+
+| CLI flag                  | Description                                                            |
+|---------------------------|------------------------------------------------------------------------|
+| `--sequential-xfer <Path>`| Sequential MLIR transformer, typically from `pattern make-sequential`. |
+| `--composite-xfer <Path>` | Composite MLIR transformer to compare against.                         |
+| `--xfer-name <str>`       | Optional function name inside the composite MLIR file.                 |
+| `-i, --input <Path>`      | Enum TSV input data, typically from `pattern generate-input`.          |
+| `--exact-bw <int>`        | Bitwidth used for exact pattern eval.                                  |
+| `--norm-bw <int>`         | Bitwidth used for norm pattern eval.                                   |
+
+Example:
+```bash
+pattern eval                             \
+  --sequential-xfer pattern_008_seq.mlir \
+  --composite-xfer composite_008.mlir    \
+  -i pattern_008_enum_data.tsv           \
+```
 
 ## Important CLI Options for `simplifier`
 
@@ -224,8 +330,6 @@ Norm bw:  (64, 5000, 5000)
 
 ## Important CLI Options for `max-precise`
 
-Example usage: `max-precise --op mlir/Operations/Or.mlir -d KnownBits --args "00??,11??" --bw 4`
-
 | CLI flag    | Description                                            |
 |-------------|--------------------------------------------------------|
 | `--op`      | Path to a concrete operation or pattern (`.mlir` file) |
@@ -234,3 +338,6 @@ Example usage: `max-precise --op mlir/Operations/Or.mlir -d KnownBits --args "00
 | `--domain`  | The domain (only KnownBits is implemented now)         |
 | `--timeout` | Timeout in seconds                                     |
 | `--input`   | Takes an enum `.tsv`, and will sovle all `hbw` rows    |
+
+Example: 
+`max-precise --op mlir/Operations/Or.mlir -d KnownBits --args "00??,11??" --bw 4`
