@@ -310,8 +310,8 @@ async def run_single_synthesis_task(
         task=task,
         solution_text=llm_output,
         solution_iters=soln_iters,
-        transformer_path=transformer_file, 
-        eval_summary=None
+        transformer_path=transformer_file,
+        eval_summary=None,
     )
 
     eval_summary: str | None = None
@@ -330,11 +330,11 @@ async def run_single_synthesis_task(
         )
 
     return SynthesisResult(
-        task=task, 
-        solution_text=llm_output, 
+        task=task,
+        solution_text=llm_output,
         solution_iters=soln_iters,
         transformer_path=transformer_file,
-        eval_summary=eval_summary
+        eval_summary=eval_summary,
     )
 
 
