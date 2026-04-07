@@ -97,13 +97,43 @@ def _collect_program_dags(paths: list[Path]) -> dict[str, DAG]:
     return dags
 
 
+# Ops excluded from pattern search — edit this tuple to add/remove exclusions
+EXCLUDED_OP_TYPES: tuple[type, ...] = (GetOp, MakeOp)
+
+
+def _is_excluded_vertex(v: Vertex) -> bool:
+    if v.opcode in (Opcode.leaf(), Opcode("block_argument", 0)):
+        return True
+    if isinstance(v.mlir_op, EXCLUDED_OP_TYPES):
+        return True
+    return False
+
+
+def _reachable_inst_count(root: Vertex) -> int:
+    """Count non-excluded vertices reachable from root, stopping traversal at excluded nodes."""
+    seen: set[int] = set()
+    count = 0
+
+    def dfs(v: Vertex) -> None:
+        nonlocal count
+        if id(v) in seen:
+            return
+        seen.add(id(v))
+        if _is_excluded_vertex(v):
+            return
+        count += 1
+        for arg in v.args:
+            dfs(arg)
+
+    dfs(root)
+    return count
+
+
 def _collect_opcode_signatures(program_dags: dict[str, DAG]) -> list[Opcode]:
     seen: set[Opcode] = set()
     for dag in program_dags.values():
         for v in iter_vertices(dag.root):
-            if v.opcode in (Opcode.leaf(), Opcode("block_argument", 0)):
-                continue
-            if isinstance(v.mlir_op, (GetOp, MakeOp)):
+            if _is_excluded_vertex(v):
                 continue
             seen.add(v.opcode)
     return sorted(seen, key=lambda s: (s.key, s.arity))
@@ -112,12 +142,12 @@ def _collect_opcode_signatures(program_dags: dict[str, DAG]) -> list[Opcode]:
 def _precompute_reachable_sizes(
     program_dags: dict[str, DAG],
 ) -> dict[str, dict[int, int]]:
-    """For each program DAG, map vertex id → number of vertices reachable from it."""
+    """For each program DAG, map vertex id → non-excluded inst count reachable from it."""
     result: dict[str, dict[int, int]] = {}
     for fn_name, dag in program_dags.items():
         sizes: dict[int, int] = {}
         for v in iter_vertices(dag.root):
-            sizes[id(v)] = len(iter_vertices(v))
+            sizes[id(v)] = _reachable_inst_count(v)
         result[fn_name] = sizes
     return result
 
@@ -207,6 +237,8 @@ def search_patterns(
             continue
 
         utility = (pattern.inst_count - 1) * total
+        # print(f"[debug] {pattern} ")
+        # print(f"[debug] total_matches={total} utility={utility} ub={ub} threshold={threshold()}")
         hit = PatternHit(
             pattern=pattern,
             pattern_key=key,
