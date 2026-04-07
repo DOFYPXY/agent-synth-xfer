@@ -8,7 +8,7 @@ from pathlib import Path
 from xdsl_smt.dialects.transfer import GetOp, MakeOp
 
 from agent.stitch.converter import mlir_program_to_dags
-from agent.stitch.matcher import match
+from agent.stitch.matcher import match, match_with_all_bindings
 from agent.stitch.util import DAG, Opcode, Vertex, iter_vertices
 
 
@@ -25,6 +25,7 @@ class PatternHit:
 class SearchResult:
     op_sigs: list[Opcode]
     hits: list[PatternHit]
+    patterns_considered: int
 
 
 def _pattern_key(root: Vertex) -> str:
@@ -60,31 +61,80 @@ def _ancestors_of(root: Vertex, target: Vertex) -> set[int]:
     return ancestors
 
 
-def _expand_pattern(pattern: DAG, op_sigs: list[Opcode]) -> list[DAG]:
-    """Expand pattern by replacing each leaf with a new instruction.
+def _expand_pattern_guided(
+    pattern: DAG,
+    bindings_by_fn: dict[str, list[dict[int, Vertex]]],
+) -> list[DAG]:
+    """Expand pattern guided by actual match bindings.
 
-    Each arg of the new instruction can be:
-    - a fresh wildcard leaf node, OR
-    - any existing node in the pattern that is not an ancestor of the replaced leaf
-      (adding a back-edge to an ancestor would create a cycle).
+    Instead of enumerating all (N+1)^k argument combinations for each opcode,
+    only generates expansions for (opcode, arg-combo) tuples that actually appear
+    in the current match data. This is complete: any child with non-zero matches
+    must correspond to some match where the leaf was bound to a vertex with that
+    opcode, so no valid children are missed.
+
+    For each match binding, the leaf's bound program vertex determines the opcode.
+    Arguments are set to existing pattern nodes where the program's children are
+    already bound, and to fresh wildcards otherwise. All 2^(shared-args)
+    generalizations are generated and deduplicated across matches.
     """
+    pattern_vertices = iter_vertices(pattern.root)
+    pattern_by_id = {id(v): v for v in pattern_vertices}
+    leaves = [v for v in pattern_vertices if v.opcode == Opcode.leaf()]
+
     results: list[DAG] = []
-    leaves = [v for v in iter_vertices(pattern.root) if v.opcode == Opcode.leaf()]
+    seen_combos: set[tuple] = set()
 
     for leaf in leaves:
         ancestors = _ancestors_of(pattern.root, leaf)
-        candidates = [v for v in iter_vertices(pattern.root) if id(v) not in ancestors]
+        non_ancestor_ids = {id(v) for v in pattern_vertices if id(v) not in ancestors}
 
-        for opcode in op_sigs:
-            k = opcode.arity
-            # None sentinel = fresh leaf wildcard
-            arg_choices: list[Vertex | None] = [None, *candidates]
-            for combo in itertools.product(arg_choices, repeat=k):
-                new_args = [
-                    Vertex(opcode=Opcode.leaf()) if a is None else a for a in combo
-                ]
-                new_vertex = Vertex(opcode=opcode, args=new_args)
-                results.append(pattern.clone_with_substitution(leaf, new_vertex))
+        for bindings_list in bindings_by_fn.values():
+            for bindings in bindings_list:
+                prog_v = bindings.get(id(leaf))
+                if prog_v is None or _is_excluded_vertex(prog_v):
+                    continue
+
+                opcode = prog_v.opcode
+
+                # Reverse map: id(program_vertex) -> pattern_vertex
+                prog_to_pattern: dict[int, Vertex] = {}
+                for pid, pv_prog in bindings.items():
+                    prog_to_pattern[id(pv_prog)] = pattern_by_id[pid]
+
+                # For each arg of prog_v, use the matching pattern node if it's a
+                # non-ancestor; otherwise fall back to a fresh wildcard (None).
+                base_args: list[Vertex | None] = []
+                for child in prog_v.args:
+                    pat_v = prog_to_pattern.get(id(child))
+                    if pat_v is not None and id(pat_v) in non_ancestor_ids:
+                        base_args.append(pat_v)
+                    else:
+                        base_args.append(None)
+
+                # Generate all generalizations: replace some specific-node args
+                # with fresh wildcards to produce less-constrained patterns.
+                specific_positions = [i for i, a in enumerate(base_args) if a is not None]
+                for mask in range(1 << len(specific_positions)):
+                    combo = list(base_args)
+                    for j, pos in enumerate(specific_positions):
+                        if not (mask >> j & 1):
+                            combo[pos] = None
+
+                    combo_key = (
+                        id(leaf),
+                        opcode,
+                        tuple(id(a) if a is not None else -1 for a in combo),
+                    )
+                    if combo_key in seen_combos:
+                        continue
+                    seen_combos.add(combo_key)
+
+                    new_args = [
+                        Vertex(opcode=Opcode.leaf()) if a is None else a for a in combo
+                    ]
+                    new_vertex = Vertex(opcode=opcode, args=new_args)
+                    results.append(pattern.clone_with_substitution(leaf, new_vertex))
 
     return results
 
@@ -154,18 +204,22 @@ def _precompute_reachable_sizes(
 
 def _get_matches(
     pattern: DAG, program_dags: dict[str, DAG]
-) -> tuple[int, dict[str, int], dict[str, list[Vertex]]]:
-    """Return (total_matches, per_fn_counts, match_roots_by_fn)."""
+) -> tuple[
+    int, dict[str, int], dict[str, list[Vertex]], dict[str, list[dict[int, Vertex]]]
+]:
+    """Return (total_matches, per_fn_counts, match_roots_by_fn, bindings_by_fn)."""
     total = 0
     per_fn: dict[str, int] = {}
     roots_by_fn: dict[str, list[Vertex]] = {}
+    bindings_by_fn: dict[str, list[dict[int, Vertex]]] = {}
     for fn_name, prog in program_dags.items():
         matched = match(prog, pattern)
         if matched:
             per_fn[fn_name] = len(matched)
             roots_by_fn[fn_name] = matched
+            bindings_by_fn[fn_name] = match_with_all_bindings(prog, pattern)
             total += len(matched)
-    return total, per_fn, roots_by_fn
+    return total, per_fn, roots_by_fn, bindings_by_fn
 
 
 def _upper_bound(
@@ -221,6 +275,7 @@ def search_patterns(
             return top_hits[0][0]
         return 0
 
+    ptn_cnt = 0
     while heap:
         neg_ub, _, pattern = heapq.heappop(heap)
         ub = -neg_ub
@@ -231,8 +286,9 @@ def search_patterns(
         if key in seen:
             continue
         seen.add(key)
+        ptn_cnt += 1
 
-        total, per_fn, roots_by_fn = _get_matches(pattern, program_dags)
+        total, per_fn, roots_by_fn, bindings_by_fn = _get_matches(pattern, program_dags)
         if total == 0:
             continue
 
@@ -261,8 +317,8 @@ def search_patterns(
         if child_ub <= threshold():
             continue
 
-        for child in _expand_pattern(pattern, op_sigs):
+        for child in _expand_pattern_guided(pattern, bindings_by_fn):
             heapq.heappush(heap, (-child_ub, next(counter), child))
 
     hits = sorted([h for _, _, h in top_hits], key=lambda h: (-h.utility, h.pattern_key))
-    return SearchResult(op_sigs=op_sigs, hits=hits)
+    return SearchResult(op_sigs=op_sigs, hits=hits, patterns_considered=ptn_cnt)

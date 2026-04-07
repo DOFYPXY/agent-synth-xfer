@@ -44,6 +44,8 @@ def main() -> None:
         print(hit.pattern)
         print()
 
+    print(f"patterns considered: {result.patterns_considered}")
+
 
 if __name__ == "__main__":
     main()
