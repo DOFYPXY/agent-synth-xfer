@@ -239,7 +239,6 @@ def _format_eval_examples_for_agent(
             [
                 "  • KnownBits: each input/output is one string of length = bw above; bits are MSB→LSB (left to right). "
                 "`0` and `1` are known; `?` is unknown.",
-                "  • Imprecise rows may still show `dist: 0.0000`; treat them as not exactly matching `best`.",  # Todo: fix this dist bug
             ]
         )
     else:
