@@ -151,7 +151,7 @@ def parse_args() -> argparse.Namespace:
         "--autodoc-instructions",
         type=Path,
         default=Path(__file__).parent / "md" / "autodoc_instructions.md",
-        help="Path to autodoc agent instructions file (default: agent/md/autodoc_instructions.md)"
+        help="Path to autodoc agent instructions file (default: agent/md/autodoc_instructions.md)",
     )
     parser.add_argument(
         "--library-prompt",

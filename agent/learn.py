@@ -10,9 +10,9 @@ from agent.stitch.search import search_patterns
 
 from .agent_helper import format_agent_run_dump
 from .util import (
+    FunctionDocumentation,
     LibraryFunction,
     LibraryState,
-    FunctionDocumentation,
     SynthesisResult,
     SynthesisTask,
     dump_library,
