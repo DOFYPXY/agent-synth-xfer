@@ -111,12 +111,16 @@ def _run_agent_learn(
 
 def _name_one_function(
     prompt: str,
+    api_key: str,
     model: str,
     ops_path: Path,
     instructions_path: Path,
     max_turns: int,
-    func_to_name: LibraryFunction,
+    library: LibraryState,
+    func_to_name: str,
 ) -> LibraryFunction:
+    """Given the source for an MLIR function, provide a name and docstring for it agentically."""
+    del api_key  # Reserved for future model/provider auth parity.
     pass
 
 
@@ -131,9 +135,8 @@ def _run_stitch_learn(
     max_turns: int,
     max_instructions: int,
     top_k: int,
-) -> tuple[LibraryState, object]:
-    """Learns library functions with Stitch. Learns func names and docstring agentically. Returns (LibraryState, run_result)."""
-    del api_key  # Reserved for future model/provider auth parity.
+) -> LibraryState:
+    """Learns library functions with Stitch. Learns func names and docstring agentically."""
 
     progs: list[str] = []
     for result in synthesis_results:
@@ -146,15 +149,22 @@ def _run_stitch_learn(
     )
     hits = [h for h in result.hits if h.pattern.inst_count >= 2]
 
-    lib_funcs: list[LibraryFunction] = []
-    for i in range(len(hits)):
-        lib_funcs.append(
-            LibraryFunction(
-                function_name=f"func{i}",
-                docstring="",
-                source=str(hits[i].pattern)
+    new_lib_funcs: list[LibraryFunction] = []
+    for hit in hits:
+        new_lib_funcs.append(
+            _name_one_function(
+                prompt=prompt,
+                api_key=api_key,
+                model=model,
+                ops_path=ops_path,
+                instructions_path=instructions_path,
+                max_turns=max_turns,
+                library=previous_library,
+                func_to_name=hit,
             )
         )
+    
+    return LibraryState(previous_library.functions + new_lib_funcs)
 
 
 def run_library_learn_task(
