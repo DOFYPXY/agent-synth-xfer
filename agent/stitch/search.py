@@ -150,9 +150,12 @@ def _dags_from_paths(paths: list[Path]) -> dict[str, DAG]:
 
 def _dags_from_strs(progs: list[str]) -> dict[str, DAG]:
     dags: dict[str, DAG] = {}
-    for i in range(len(progs)):
-        for fn, dag in mlir_program_to_dags(progs[i]).items():
-            dags[f"func{i}:{fn}"] = dag
+    for i, prog in enumerate(progs):
+        try:
+            for fn, dag in mlir_program_to_dags(prog).items():
+                dags[f"func{i}:{fn}"] = dag
+        except Exception:
+            print(f"Exception on the following program:\n{prog}")
     return dags
 
 

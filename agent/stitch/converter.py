@@ -186,14 +186,23 @@ def pattern_to_mlir_program(pattern: DAG, program_dags: dict[str, DAG]) -> str:
     internals = [v for v in postorder if v.opcode != Opcode.leaf()]
 
     # ------------------------------------------------------------------ #
-    # 3. Assign SSA names                                                  #
+    # 3. Assign SSA names (keyed by PATTERN vertex id)                   #
     # ------------------------------------------------------------------ #
-    # id(program_vertex) -> SSA name string
-    name: dict[int, str] = {}
-    for i, pv in enumerate(leaves):
-        name[id(binding[id(pv)])] = f"%arg{i}"
-    for i, pv in enumerate(internals):
-        name[id(binding[id(pv)])] = f"%{i}"
+    # Keying by pattern vertex id (not program vertex id) ensures each
+    # pattern vertex gets a unique name even when multiple pattern vertices
+    # bind to the same program vertex (e.g. get_all_ones called 3× on the
+    # same arg all map to one program op — the old program-vertex key caused
+    # them to overwrite each other, producing duplicate SSA names).
+    name: dict[int, str] = {}  # id(pattern_vertex) → SSA name
+    arg_counter = 0
+    val_counter = 0
+    for pv in postorder:
+        if pv.opcode == Opcode.leaf():
+            name[id(pv)] = f"%arg{arg_counter}"
+            arg_counter += 1
+        else:
+            name[id(pv)] = f"%{val_counter}"
+            val_counter += 1
 
     # ------------------------------------------------------------------ #
     # 4. Helper: print a single xdsl Attribute to a string                #
@@ -215,7 +224,7 @@ def pattern_to_mlir_program(pattern: DAG, program_dags: dict[str, DAG]) -> str:
     # 5. Build function signature                                          #
     # ------------------------------------------------------------------ #
     arg_parts = [
-        f"{name[id(binding[id(lv)])]} : {_result_type(binding[id(lv)])}" for lv in leaves
+        f"{name[id(lv)]} : {_result_type(binding[id(lv)])}" for lv in leaves
     ]
     root_prog = binding[id(pattern.root)]
     ret_type = _result_type(root_prog)
@@ -231,9 +240,9 @@ def pattern_to_mlir_program(pattern: DAG, program_dags: dict[str, DAG]) -> str:
         if op is None or isinstance(op, BA):
             raise ValueError("internal pattern vertex missing Operation mlir_op")
 
-        result_name = name[id(prog_v)]
+        result_name = name[id(pat_v)]
         result_type = _result_type(prog_v)
-        operand_names = ", ".join(name[id(binding[id(a)])] for a in pat_v.args)
+        operand_names = ", ".join(name[id(a)] for a in pat_v.args)
         operand_types = ", ".join(_result_type(binding[id(a)]) for a in pat_v.args)
 
         # Attributes + properties (xdsl keeps them in separate dicts)
@@ -253,7 +262,7 @@ def pattern_to_mlir_program(pattern: DAG, program_dags: dict[str, DAG]) -> str:
     # ------------------------------------------------------------------ #
     # 7. Return and close                                                  #
     # ------------------------------------------------------------------ #
-    root_name = name[id(root_prog)]
+    root_name = name[id(pattern.root)]
     lines.append(f"  func.return {root_name} : {ret_type}")
     lines.append("}")
 
