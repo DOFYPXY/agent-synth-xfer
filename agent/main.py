@@ -69,8 +69,8 @@ def run_library_learning_loop(
                     version=round_idx + 1,
                     previous_library=library,
                     synthesis_results=latest_results,
-                    max_instructions=10,
-                    top_k=7,
+                    max_instructions=5,
+                    top_k=5,
                     args=args,
                     api_key=api_key,
                 )
