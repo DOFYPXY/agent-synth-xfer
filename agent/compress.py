@@ -1,5 +1,6 @@
 """File compression workflow helpers."""
 
+import json
 from pathlib import Path
 import re
 
@@ -27,6 +28,8 @@ def _run_agent_compress(
     model: str,
     ops_path: Path,
     instructions_path: Path,
+    max_turns: int,
+    lbw: list[int],
 ) -> tuple[str, object]:
     """Run agent to compress a target file. Returns (final_output, run_result)."""
     del api_key  # Reserved for future model/provider auth parity.
@@ -42,9 +45,42 @@ def _run_agent_compress(
         return ops_path.read_text(encoding="utf-8")
 
     @function_tool
-    def get_library_text() -> str:
-        """Return the library (in MLIR) containing reusable helper functions mined from previous synthesis rounds. Prefer calling these functions in your solution to keep the program short."""
-        return library.functions_text
+    def list_library_functions() -> str:
+        """List available library functions as JSON dictionary of func names and docstrings"""
+        funcs = {func.function_name: func.docstring for func in library.functions}
+        return json.dumps(funcs)
+
+    @function_tool
+    def get_library_function(name: str) -> str:
+        """Return the source of a function by its name"""
+        for func in library.functions:
+            if func.function_name == name:
+                return func.source
+
+        raise ValueError("name must refer to a function in the library")
+
+    @function_tool
+    def search_library_functions(query: str, top_k: int = 3) -> str:
+        """Search library functions by substring. Returns JSON array of matches with function name and docstring."""
+        if top_k <= 0:
+            return "[]"
+        q = query.strip()
+        if not q:
+            return "[]"
+        matches: list[dict] = []
+        for func in library.functions:
+            searchable = f"{func.function_name}\n{func.docstring}\n{func.source}"
+            if searchable.lower().find(q.lower()) == -1:
+                continue
+            matches.append(
+                {
+                    "function_name": func.function_name,
+                    "docstring": func.docstring,
+                }
+            )
+            if len(matches) >= top_k:
+                break
+        return json.dumps(matches)
 
     @function_tool
     def verify_correctness(transformer_mlir: str) -> str:
@@ -55,10 +91,11 @@ def _run_agent_compress(
         if not target.eval_summary:
             full_soln = merge_library_text(library.functions_text, target.solution_text)
             curr_eval_summary = eval_transformer(
-                solution_path=full_soln,
+                solution=full_soln,
                 op_path=Path(target.task.op_file),
                 domain=AbstractDomain.KnownBits,
                 xfer_name=f"kb_{target.task.op_name.lower()}",
+                lbw=lbw,
             )
             match = re.search(pattern, curr_eval_summary)
             if match is None:
@@ -83,10 +120,11 @@ def _run_agent_compress(
         # Get eval of new transformer
         full_soln = merge_library_text(library.functions_text, transformer_mlir)
         compressed_eval_summary = eval_transformer(
-            solution_path=full_soln,
+            solution=full_soln,
             op_path=Path(target.task.op_file),
             domain=AbstractDomain.KnownBits,
             xfer_name=f"kb_{target.task.op_name.lower()}",
+            lbw=lbw,
         )
         match = re.search(pattern, compressed_eval_summary)
         if match is None:
@@ -115,13 +153,15 @@ def _run_agent_compress(
         tools=[
             get_target_file,
             get_available_primitives,
-            get_library_text,
+            list_library_functions,
+            get_library_function,
+            search_library_functions,
             verify_correctness,
         ],
         model=model,
     )
 
-    result = Runner.run_sync(agent, prompt)
+    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
 
     return (result.final_output, result)
 
@@ -152,6 +192,8 @@ def run_compress_task(
         model=args.model,
         ops_path=args.ops,
         instructions_path=args.compress_instructions,
+        max_turns=args.max_turns,
+        lbw=args.exact_bw,
     )
     print_token_usage(run_result)
 
@@ -161,7 +203,7 @@ def run_compress_task(
         dump_path = save_file(
             format_agent_run_dump(run_result),
             output_dir,
-            f"compress_run_{op_name}.log",
+            f"compress_run{round_num}_{op_name}.log",
         )
         print(f"Agent run dump: {dump_path}")
 
@@ -175,6 +217,7 @@ def run_compress_task(
     return SynthesisResult(
         task=target.task,
         solution_text=target_text,
+        solution_iters=target.solution_iters,
         transformer_path=target.transformer_path,
         eval_summary=target.eval_summary,
     )

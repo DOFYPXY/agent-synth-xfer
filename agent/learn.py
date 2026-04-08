@@ -1,6 +1,7 @@
 """Library learning workflow helpers."""
 
 import argparse
+import json
 from pathlib import Path
 
 from agents import Agent, Runner, function_tool
@@ -10,11 +11,10 @@ from .util import (
     LibraryState,
     SynthesisResult,
     SynthesisTask,
-    clean_llm_output,
+    dump_library,
     extract_op_name,
     get_api_key,
     load_initial_library,
-    merge_library_text,
     print_token_usage,
     save_file,
 )
@@ -28,16 +28,20 @@ def _run_agent_learn(
     model: str,
     ops_path: Path,
     instructions_path: Path,
-) -> tuple[str, object]:
-    """Run agent to learn library functions. Returns (final_output, run_result)."""
+    max_turns: int,
+) -> tuple[LibraryState, object]:
+    """Run agent to learn library functions. Returns (LibraryState, run_result)."""
     del api_key  # Reserved for future model/provider auth parity.
 
     @function_tool
     def get_corpus_functions() -> str:
         """Return the corpus MLIR programs to learn library funcs from"""
-        corpus = "\n".join([result.solution_text for result in synthesis_results])
+        text = ""
+        for result in synthesis_results:
+            for soln in result.solution_iters:
+                text += f"{soln}\n"
 
-        return corpus
+        return text
 
     @function_tool
     def get_available_primitives() -> str:
@@ -45,9 +49,44 @@ def _run_agent_learn(
         return ops_path.read_text(encoding="utf-8")
 
     @function_tool
-    def get_library_text() -> str:
-        """Return the library (in MLIR) containing reusable helper functions mined from previous synthesis rounds. Prefer calling these functions in your solution to keep the program short."""
-        return previous_library.functions_text
+    def list_library_functions() -> str:
+        """List available library functions as JSON dictionary of func names and docstrings"""
+        funcs = {
+            func.function_name: func.docstring for func in previous_library.functions
+        }
+        return json.dumps(funcs)
+
+    @function_tool
+    def get_library_function(name: str) -> str:
+        """Return the source of a function by its name"""
+        for func in previous_library.functions:
+            if func.function_name == name:
+                return func.source
+
+        raise ValueError("name must refer to a function in the library")
+
+    @function_tool
+    def search_library_functions(query: str, top_k: int = 3) -> str:
+        """Search library functions by substring. Returns JSON array of matches with function name and docstring."""
+        if top_k <= 0:
+            return "[]"
+        q = query.strip()
+        if not q:
+            return "[]"
+        matches: list[dict] = []
+        for func in previous_library.functions:
+            searchable = f"{func.function_name}\n{func.docstring}\n{func.source}"
+            if searchable.lower().find(q.lower()) == -1:
+                continue
+            matches.append(
+                {
+                    "function_name": func.function_name,
+                    "docstring": func.docstring,
+                }
+            )
+            if len(matches) >= top_k:
+                break
+        return json.dumps(matches)
 
     agent = Agent(
         name="LibraryFunctionLearner",
@@ -55,12 +94,15 @@ def _run_agent_learn(
         tools=[
             get_corpus_functions,
             get_available_primitives,
-            get_library_text,
+            list_library_functions,
+            get_library_function,
+            search_library_functions,
         ],
         model=model,
+        output_type=LibraryState,
     )
 
-    result = Runner.run_sync(agent, prompt)
+    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
 
     return (result.final_output, result)
 
@@ -89,6 +131,7 @@ def run_library_learn_task(
         model=args.model,
         ops_path=args.ops,
         instructions_path=args.library_instructions,
+        max_turns=args.max_turns,
     )
 
     print_token_usage(run_result)
@@ -101,15 +144,17 @@ def run_library_learn_task(
         )
         print(f"Agent run dump: {dump_path}")
 
-    lib_text = merge_library_text(
-        previous_library.functions_text,
-        clean_llm_output(llm_output),
-    )
-    save_file(lib_text, output_dir, "library_current.mlir")
-    library_file = save_file(lib_text, output_dir, f"library_v{version}.mlir")
-    print(f"Library: {library_file}")
+    existing_names = {f.function_name for f in previous_library.functions}
+    new_functions = [
+        f for f in llm_output.functions if f.function_name not in existing_names
+    ]
+    merged = LibraryState(functions=previous_library.functions + new_functions)
 
-    return LibraryState(lib_text)
+    lib_dir = output_dir / f"library{version}"
+    dump_library(merged, lib_dir)
+    print(f"Library: {lib_dir}")
+
+    return merged
 
 
 def main():
@@ -147,16 +192,22 @@ def main():
         help="Path to ops.md file (default: agent/ops.md)",
     )
     parser.add_argument(
-        "--library",
+        "--library-dir",
         type=Path,
         default=None,
-        help="Optional initial library file for library-learning workflow",
+        help="Optional initial library directory for library-learning workflow",
     )
     parser.add_argument(
         "--rounds",
         type=int,
         default=1,
         help="Number of library-learn rounds to run (default: 1)",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=20,
+        help="Max iterations for agent (default: 20, use 2-3 for fast dev)",
     )
 
     args = parser.parse_args()
@@ -177,8 +228,11 @@ def main():
         if not path.exists():
             parser.error(f"{name}: path does not exist: {path}")
 
-    if args.library is not None and not args.library.exists():
-        parser.error(f"--library: path does not exist: {args.library}")
+    if args.library_dir is not None and not args.library_dir.is_dir():
+        parser.error(f"--library-dir: not a directory: {args.library_dir}")
+
+    if args.max_turns <= 0:
+        parser.error("--max-turns: must be greater than 0")
 
     # Parse input files
     corpus = []
@@ -193,7 +247,7 @@ def main():
         corpus.append(result)
 
     api_key = get_api_key()
-    lib = load_initial_library(args.library)
+    lib = load_initial_library(args.library_dir)
 
     for rnd in range(args.rounds):
         lib = run_library_learn_task(

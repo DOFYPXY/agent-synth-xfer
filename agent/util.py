@@ -5,9 +5,15 @@ import os
 from pathlib import Path
 import re
 
+from pydantic import BaseModel
+
 from synth_xfer._util.domain import AbstractDomain
-from synth_xfer._util.random import Sampler
-from synth_xfer.cli.eval_final import _parse_bw_args, run
+from synth_xfer._util.eval import enum, eval_transfer_func
+from synth_xfer._util.eval_result import EvalResult
+from synth_xfer._util.jit import Jit
+from synth_xfer._util.lower import LowerToLLVM
+from synth_xfer._util.parse_mlir import get_helper_funcs, parse_mlir_mod
+from synth_xfer._util.random import Random, Sampler
 
 
 @dataclass
@@ -24,15 +30,34 @@ class SynthesisResult:
 
     task: SynthesisTask
     solution_text: str
+    solution_iters: list[str]
     transformer_path: Path
     eval_summary: str | None = None
 
 
-@dataclass
-class LibraryState:
+class LibraryFunction(BaseModel):
+    """A single library function"""
+
+    function_name: str
+    docstring: str
+    source: str
+
+
+class LibraryState(BaseModel):
     """Current learned library state passed to synthesis prompts."""
 
-    functions_text: str
+    functions: list[LibraryFunction]
+
+    @property
+    def functions_text(self) -> str:
+        """Render all functions as a builtin.module MLIR string."""
+        if not self.functions:
+            return ""
+        body = "\n\n".join(f.source for f in self.functions)
+        indented = "\n".join(
+            "  " + line if line.strip() else "" for line in body.splitlines()
+        )
+        return f"builtin.module {{\n{indented}\n}}"
 
 
 def get_api_key() -> str:
@@ -54,22 +79,59 @@ def extract_op_name(op_file_path: str) -> str:
     return Path(op_file_path).stem
 
 
-def load_initial_library(library_file: Path | None) -> LibraryState:
+def _parse_library_function(text: str) -> LibraryFunction | None:
+    """Parse a single func.func definition from text. Returns None if not found."""
+    func_pattern = re.compile(r"func\.func\s+@(\w+)\s*\(")
+    match = func_pattern.search(text)
+    if not match:
+        return None
+
+    func_name = match.group(1)
+
+    brace_pos = text.find("{", match.end())
+    if brace_pos == -1:
+        raise ValueError(f"Ill-formed MLIR: no opening brace for function '{func_name}'")
+
+    depth = 1
+    i = brace_pos + 1
+    while i < len(text) and depth > 0:
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+        i += 1
+
+    if depth != 0:
+        raise ValueError(f"Ill-formed MLIR: unmatched braces in function '{func_name}'")
+
+    source = text[match.start() : i].strip()
+
+    docstring = ""
+    body = text[brace_pos + 1 : i - 1]
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            docstring = stripped[2:].strip()
+            break
+
+    return LibraryFunction(function_name=func_name, docstring=docstring, source=source)
+
+
+def load_initial_library(library_dir: Path | None) -> LibraryState:
     """Load initial library text for round 0."""
-    if library_file is None:
-        return LibraryState("builtin.module {}")
-    return LibraryState(library_file.read_text())
 
+    if library_dir is None:
+        return LibraryState(functions=[])
 
-def read_prompt_template() -> str:
-    """Read prompt template, removing HTML comments (<!-- -->)."""
-    content = (Path(__file__).parent / "prompt.md").read_text()
-    return re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL).strip()
+    functions = []
+    for entry in sorted(library_dir.iterdir()):
+        if not entry.is_file():
+            continue
+        func = _parse_library_function(entry.read_text())
+        if func is not None:
+            functions.append(func)
 
-
-def read_op_file(op_file_path: str) -> str:
-    """Read operation MLIR file."""
-    return Path(op_file_path).read_text()
+    return LibraryState(functions=functions)
 
 
 def clean_llm_output(output: str) -> str:
@@ -118,6 +180,14 @@ def save_file(content: str, dir: Path, file_name: str) -> Path:
     return path
 
 
+def dump_library(lib: LibraryState, out_dir: Path) -> Path:
+    """Save library funcs to library directory"""
+    for func in lib.functions:
+        save_file(func.source, out_dir, f"{func.function_name}.mlir")
+
+    return out_dir
+
+
 def _extract_module_body(mlir: str) -> str:
     """Extract content inside the outermost builtin.module { } block, dedented by 2 spaces."""
     if "builtin.module" not in mlir:
@@ -148,44 +218,110 @@ def merge_library_text(mod1: str, mod2: str) -> str:
     return f"builtin.module {{\n{indented}\n}}"
 
 
+def _format_eval_examples_for_agent(
+    eval_result: EvalResult, domain: AbstractDomain
+) -> str:
+    """Optional multi-line suffix: legend plus unsound/imprecise CaseExample lines per bitwidth."""
+    if not any(
+        res.unsound_examples or res.imprecise_examples for res in eval_result.per_bit_res
+    ):
+        return ""
+
+    lines: list[str] = [
+        "",
+        "Counterexamples:",
+        "How to read each example line:",
+        "  • The `( ... )` before `->` lists abstract inputs in MLIR argument order: first = %0, then %1, and so on.",
+        "  • After `->`: your abstract output in this eval; `best` is the optimal abstract output for that input.",
+    ]
+    if domain == AbstractDomain.KnownBits:
+        lines.extend(
+            [
+                "  • KnownBits: each input/output is one string of length = bw above; bits are MSB→LSB (left to right). "
+                "`0` and `1` are known; `?` is unknown.",
+            ]
+        )
+    else:
+        assert False, f"Domain {domain} not supported in example formatting yet"
+    lines.extend(
+        [
+            "",
+            "Unsound: the abstract output does not soundly cover the true concrete result; "
+            "`best` is the optimal abstract output for that input.",
+            "Imprecise: still sound but less precise than optimal; `dist` is precision loss vs "
+            "optimal (0 = exact).",
+            "",
+        ]
+    )
+    unsound_lines: list[str] = []
+    imprecise_lines: list[str] = []
+    for res in eval_result.per_bit_res:
+        for ex in res.unsound_examples:
+            unsound_lines.append(f"  bw={res.bitwidth}: {ex.to_str(show_dist=False)}")
+        for ex in res.imprecise_examples:
+            imprecise_lines.append(f"  bw={res.bitwidth}: {ex.to_str()}")
+    if unsound_lines:
+        lines.append("Unsound examples (per bitwidth):")
+        lines.extend(unsound_lines)
+        lines.append("")
+    if imprecise_lines:
+        lines.append("Imprecise examples (per bitwidth):")
+        lines.extend(imprecise_lines)
+    return "\n".join(lines).rstrip("\n")
+
+
 def eval_transformer(
-    solution_path: Path | str,
+    solution: str,
     op_path: Path,
     domain: AbstractDomain,
     xfer_name: str,
     *,
-    exact_bw: tuple[int, ...] = (8,),
-    norm_bw: tuple[int, ...] = (64, 2500, 50000),
+    lbw: list[int],
+    mbw: list[tuple[int, int]] = [],
+    hbw: list[tuple[int, int, int]] = [],
     random_seed: int | None = None,
+    unsound_ex: int = 0,
+    imprecise_ex: int = 0,
 ) -> str:
-    """Run eval on a transformer (file path or MLIR string) and return a summary string.
+    """Run eval on a transformer (MLIR string) and return a summary string.
 
     For use by the agent and by main.run_eval(). On failure returns 'error: ...'.
     """
     try:
-        lbw, mbw, hbw = _parse_bw_args(exact_bw, norm_bw)
+        all_bws = lbw + [x[0] for x in mbw] + [x[0] for x in hbw]
+        EvalResult.init_bw_settings(
+            set(lbw), set(x[0] for x in mbw), set(x[0] for x in hbw)
+        )
         sampler = Sampler.uniform()
-        top_r, synth_r = run(
-            domain=domain,
-            lbw=lbw,
-            mbw=mbw,
-            hbw=hbw,
-            op_path=op_path,
-            solution_path=solution_path,
-            xfer_name=xfer_name,
-            random_seed=random_seed,
-            sampler=sampler,
+
+        helpers = get_helper_funcs(op_path, domain)
+        sol_module = parse_mlir_mod(solution)
+        seed = (
+            Random(random_seed).randint(0, 1_000_000)
+            if random_seed is None
+            else random_seed
         )
-        exact_bw_val = exact_bw[0]
-        norm_bw_val = norm_bw[0]
-        top_exact = next(x for x in top_r.per_bit_res if x.bitwidth == exact_bw_val)
-        synth_exact = next(x for x in synth_r.per_bit_res if x.bitwidth == exact_bw_val)
-        top_norm = next(x for x in top_r.per_bit_res if x.bitwidth == norm_bw_val)
-        synth_norm = next(x for x in synth_r.per_bit_res if x.bitwidth == norm_bw_val)
-        return (
-            f"Sound %: {synth_exact.get_sound_prop() * 100:.2f}, Exact %: {synth_exact.get_exact_prop() * 100:.2f}, Norm: {synth_norm.dist:.4f} "
-            # f"(top Exact %: {top_exact.get_exact_prop() * 100:.2f}, top Norm: {top_norm.dist:.4f})"
+
+        lowerer = LowerToLLVM(all_bws)
+        lowerer.add_fn(helpers.meet_func)
+        lowerer.add_fn(helpers.get_top_func)
+        lowerer.add_mod(sol_module, [xfer_name])
+
+        to_eval = enum(lbw, mbw, hbw, seed, helpers, sampler)
+        with Jit() as jit:
+            jit.add_mod(lowerer)
+            eval_input = {
+                bw: (to_eval[bw], [jit.get_fn_ptr(f"{xfer_name}_{bw}_shim")], [])
+                for bw in all_bws
+            }
+            (synth_r,) = eval_transfer_func(eval_input, unsound_ex, imprecise_ex)
+
+        summary = (
+            f"Sound %: {synth_r.get_sound_prop() * 100:.2f}, "
+            f"Exact %: {synth_r.get_exact_prop() * 100:.2f}, "
+            f"Dist: {synth_r.sound_dist:.4f}"
         )
+        return summary + _format_eval_examples_for_agent(synth_r, domain)
     except Exception as e:
         msg = str(e).strip() or repr(e) or type(e).__name__
         # Single line, truncated, so the agent reliably sees parse/location info

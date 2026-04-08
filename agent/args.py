@@ -3,6 +3,19 @@
 import argparse
 from pathlib import Path
 
+import yaml
+
+
+def _load_ops_from_bench(bench_path: Path) -> list[str]:
+    """Parse bench.yaml and return list of MLIR op file paths."""
+    with bench_path.open() as f:
+        data = yaml.safe_load(f)
+    ops = []
+    for _domain, cfg in data.items():
+        for op_name in cfg.get("concrete_ops", []):
+            ops.append(str(Path("mlir/Operations") / f"{op_name}.mlir"))
+    return ops
+
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     for name, path in [
@@ -20,12 +33,25 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if not args.examples_dir.is_dir():
         parser.error(f"--examples-dir: not a directory: {args.examples_dir}")
 
-    if args.library is not None and not args.library.exists():
-        parser.error(f"--library: path does not exist: {args.library}")
+    if args.library_dir is not None and not args.library_dir.is_dir():
+        parser.error(f"--library-dir: not a directory: {args.library_dir}")
+
+    if args.benchmark is not None and args.op_file:
+        parser.error("op_file and --benchmark are mutually exclusive")
+    if args.benchmark is None and not args.op_file:
+        parser.error("provide op_file or --benchmark")
+
+    if args.benchmark is not None:
+        if not args.benchmark.exists():
+            parser.error(f"--benchmark: path does not exist: {args.benchmark}")
+        args.op_file = _load_ops_from_bench(args.benchmark)
 
     for op_file in args.op_file:
         if not Path(op_file).exists():
             parser.error(f"op_file: path does not exist: {op_file}")
+
+    if args.max_turns <= 0:
+        parser.error("--max-turns: must be greater than 0")
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,8 +59,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Synthesize transfer functions")
     parser.add_argument(
         "op_file",
-        nargs="+",
+        nargs="*",
         help="Operation MLIR file(s) (e.g., mlir/Operations/Add.mlir)",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=Path,
+        default=None,
+        metavar="YAML",
+        help="Path to bench.yaml specifying ops per domain (mutually exclusive with op_file)",
     )
     parser.add_argument(
         "-o", "--output", default="outputs/agent", help="Output directory"
@@ -101,10 +134,10 @@ def parse_args() -> argparse.Namespace:
         help="Path to template.mlir file (default: agent/template.mlir)",
     )
     parser.add_argument(
-        "--library",
+        "--library-dir",
         type=Path,
         default=None,
-        help="Optional initial library file for library-learning workflow",
+        help="Optional initial library directory for library-learning workflow",
     )
     parser.add_argument(
         "--rounds",
@@ -123,6 +156,14 @@ def parse_args() -> argparse.Namespace:
         "--no-compress",
         action="store_true",
         help="Skip the compress step after synthesis (default: compress is enabled)",
+    )
+    parser.add_argument(
+        "--exact-bw",
+        type=int,
+        nargs="+",
+        default=[8],
+        metavar="BW",
+        help="Exact bitwidth(s) for eval (default: 8)",
     )
 
     args = parser.parse_args()
