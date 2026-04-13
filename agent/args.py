@@ -88,7 +88,16 @@ def parse_args() -> argparse.Namespace:
         "-o", "--output", default="outputs/agent", help="Output directory"
     )
     parser.add_argument("--skip-eval", action="store_true", help="Skip eval-final")
-    parser.add_argument("--model", default="gpt-4", help="OpenAI model")
+    parser.add_argument(
+        "--synth-model",
+        default="gpt-5.2-codex",
+        help="OpenAI model used for synthesis",
+    )
+    parser.add_argument(
+        "--library-model",
+        default="gpt-5.1-codex-mini",
+        help="OpenAI model used for library learning"
+    )
     parser.add_argument(
         "--dump-agent-run",
         action="store_true",

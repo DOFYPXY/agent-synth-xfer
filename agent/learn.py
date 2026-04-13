@@ -121,14 +121,14 @@ def run_library_learn_task(
     prompt = args.library_prompt.read_text()
 
     output_dir = Path(args.output)
-    print(f"Using model: {args.model}")
+    print(f"Using model: {args.library_model}")
 
     llm_output, run_result = _run_agent_learn(
         prompt=prompt,
         api_key=api_key,
         previous_library=previous_library,
         synthesis_results=synthesis_results,
-        model=args.model,
+        model=args.library_model,
         ops_path=args.ops,
         instructions_path=args.library_instructions,
         max_turns=args.max_turns,
@@ -167,7 +167,11 @@ def main():
     parser.add_argument(
         "-o", "--output", default="outputs/agent", help="Output directory"
     )
-    parser.add_argument("--model", default="gpt-5.1-codex-mini", help="OpenAI model")
+    parser.add_argument(
+        "--library-model",
+        default="gpt-5.1-codex-mini",
+        help="OpenAI model used for library learning"
+    )
     parser.add_argument(
         "--dump-agent-run",
         action="store_true",
