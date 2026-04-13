@@ -170,7 +170,7 @@ def main():
     parser.add_argument(
         "--library-model",
         default="gpt-5.1-codex-mini",
-        help="OpenAI model used for library learning"
+        help="OpenAI model used for library learning",
     )
     parser.add_argument(
         "--dump-agent-run",

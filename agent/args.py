@@ -61,9 +61,13 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
     if args.compress is not None:
         if not args.compress_instructions.exists():
-            parser.error(f"--compress-instructions: path does not exist: {args.compress_instructions}")
+            parser.error(
+                f"--compress-instructions: path does not exist: {args.compress_instructions}"
+            )
         if not args.compress_prompt.exists():
-            parser.error(f"--compress-prompt: path does not exist: {args.compress_prompt}")
+            parser.error(
+                f"--compress-prompt: path does not exist: {args.compress_prompt}"
+            )
 
     for op_file in args.op_file:
         if not Path(op_file).exists():
@@ -100,7 +104,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--library-model",
         default="gpt-5.1-codex-mini",
-        help="OpenAI model used for library learning"
+        help="OpenAI model used for library learning",
     )
     parser.add_argument(
         "--dump-agent-run",
