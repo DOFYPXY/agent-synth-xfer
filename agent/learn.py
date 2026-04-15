@@ -195,11 +195,13 @@ def run_stitch_learn(
 
     output_dir = Path(args.output)
 
-    progs: list[str] = []
+    progs = set()
     for result in synthesis_results:
-        progs += result.solution_iters
+            progs.add(result.solution_text)
+            for soln in result.solution_iters:
+                progs.add(soln)
 
-    result = search_patterns(progs=progs, max_instructions=max_instructions, top_k=top_k)
+    result = search_patterns(progs=list(progs), max_instructions=max_instructions, top_k=top_k)
     mlir_hits = [
         pattern_to_mlir_program(h.pattern, result.program_dags)
         for h in result.hits
@@ -220,7 +222,7 @@ def run_stitch_learn(
         )
         print(f"  Stitch run dump: {dump_path}")
 
-    print(f"  Using model {args.model}")
+    print(f"  Using model {args.library_model}")
 
     new_lib_funcs: list[LibraryFunction] = []
     agent_log = ""
@@ -228,7 +230,7 @@ def run_stitch_learn(
         print(f"  Documenting function {i + 1}/{len(mlir_hits)}")
         lib_func, run_result = _name_one_function(
             api_key=api_key,
-            model=args.model,
+            model=args.library_model,
             ops_path=args.ops,
             instructions_path=args.autodoc_instructions,
             max_turns=args.max_turns,
