@@ -223,9 +223,7 @@ def pattern_to_mlir_program(pattern: DAG, program_dags: dict[str, DAG]) -> str:
     # ------------------------------------------------------------------ #
     # 5. Build function signature                                          #
     # ------------------------------------------------------------------ #
-    arg_parts = [
-        f"{name[id(lv)]} : {_result_type(binding[id(lv)])}" for lv in leaves
-    ]
+    arg_parts = [f"{name[id(lv)]} : {_result_type(binding[id(lv)])}" for lv in leaves]
     root_prog = binding[id(pattern.root)]
     ret_type = _result_type(root_prog)
 

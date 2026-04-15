@@ -197,11 +197,13 @@ def run_stitch_learn(
 
     progs = set()
     for result in synthesis_results:
-            progs.add(result.solution_text)
-            for soln in result.solution_iters:
-                progs.add(soln)
+        progs.add(result.solution_text)
+        for soln in result.solution_iters:
+            progs.add(soln)
 
-    result = search_patterns(progs=list(progs), max_instructions=max_instructions, top_k=top_k)
+    result = search_patterns(
+        progs=list(progs), max_instructions=max_instructions, top_k=top_k
+    )
     mlir_hits = [
         pattern_to_mlir_program(h.pattern, result.program_dags)
         for h in result.hits
