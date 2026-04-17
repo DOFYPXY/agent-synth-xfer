@@ -70,6 +70,7 @@ class SynthesisAgent:
     def update_library(self, new_lib: LibraryState) -> None:
         """Update the library used by this agent's tools."""
         self._library = new_lib
+        self.solution_set.library = new_lib
 
     def _build_agent(self, args, api_key: str) -> Agent:
         del api_key  # Reserved for future model/provider auth parity.
@@ -83,7 +84,12 @@ class SynthesisAgent:
 
         @function_tool
         def get_task_bundle() -> str:
-            """Return the concrete operation/task bundle as JSON (op_name, op_file, and op_content)."""
+            """Return JSON with op_name, op_file, and op_content.
+
+            op_content is the MLIR module from op_file and includes:
+            - concrete_op: the concrete operator whose KnownBits transformer you must synthesize.
+            - op_constraint (optional): a predicate over concrete inputs; concretizations that violate it are out of scope.
+            """
             print(f"[{task.op_name.upper()}] [TOOL] get_task_bundle", flush=True)
             op_path = Path(task.op_file)
             bundle = {
@@ -223,18 +229,18 @@ class SynthesisAgent:
             If the transformer is not fully sound or not fully exact, following lines may include a short legend and up to a few concrete counterexamples per bitwidth (unsound vs imprecise), labeled with bw=..., so you can see inputs, your abstract output, and the optimal abstract output.
             """
             print(f"[{task.op_name.upper()}] [TOOL] run_eval_tool", flush=True)
-            result, soundness, _ = eval_transformer(
+            summary, eval_result = eval_transformer(
                 [transformer_mlir],
                 self._eval_args,
                 lib=[func.source for func in self._library.functions],
             )
             print(
-                f"[{task.op_name.upper()}] [TOOL] run_eval_tool result:\n{result}",
+                f"[{task.op_name.upper()}] [TOOL] run_eval_tool result:\n{summary}",
                 flush=True,
             )
-            if abs(soundness - 100) < 0.1:
+            if eval_result and eval_result.is_sound():
                 self._soln_iters.append(transformer_mlir)
-            return result
+            return summary
 
         @function_tool
         def get_existing_solutions() -> str:
@@ -355,15 +361,6 @@ async def run_single_synthesis_task(
 
         print_token_usage(run_result)
 
-    if args.meet and llm_output.strip() == "NO_IMPROVEMENT":
-        print(f"{tag} No improvement found, skipping solution update.")
-        return SynthesisResult(
-            task=task,
-            solution_text="NO_IMPROVEMENT",
-            solution_iters=soln_iters,
-            transformer_path=Path(),
-        )
-
     transformer_file = save_file(
         clean_llm_output(llm_output),
         output_dir,
@@ -373,29 +370,27 @@ async def run_single_synthesis_task(
 
     solution_text = clean_llm_output(llm_output)
 
-    eval_summary: str | None = None
-    if not args.skip_eval:
-        print(f"{tag} Evaluating transformer...")
-        eval_t0 = time.monotonic()
-        if args.meet:
-            eval_summary = synth_agent.solution_set.eval_improve(
-                solution_text,
-                synth_agent._eval_args,
-                no_previous=True,
-            )
-        else:
-            eval_summary, _, _ = eval_transformer(
-                [solution_text],
-                synth_agent._eval_args,
-                lib=[func.source for func in library.functions],
-            )
-        eval_time = time.monotonic() - eval_t0
-        print(f"{tag} Eval result: {eval_summary}")
-        save_file(
-            f"synthesis_time: {synthesis_time:.2f}s\neval_time: {eval_time:.2f}s\n\n{eval_summary}",
-            output_dir,
-            f"eval_r{round_num}_{task.op_name.lower()}.txt",
+    print(f"{tag} Evaluating transformer...")
+    eval_t0 = time.monotonic()
+    if args.meet:
+        eval_summary = synth_agent.solution_set.eval_improve(
+            solution_text,
+            synth_agent._eval_args,
+            no_previous=True,
         )
+    else:
+        eval_summary, _ = eval_transformer(
+            [solution_text],
+            synth_agent._eval_args,
+            lib=[func.source for func in library.functions],
+        )
+    eval_time = time.monotonic() - eval_t0
+    print(f"{tag} Eval result: {eval_summary}")
+    save_file(
+        f"synthesis_time: {synthesis_time:.2f}s\neval_time: {eval_time:.2f}s\n\n{eval_summary}",
+        output_dir,
+        f"eval_r{round_num}_{task.op_name.lower()}.txt",
+    )
 
     return SynthesisResult(
         task=task,

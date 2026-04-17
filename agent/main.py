@@ -51,16 +51,29 @@ def run_library_learning_loop(
     for round_idx in range(num_rounds + 1):
         sep = "=" * 60
         print(f"\n{sep}\n ROUND {round_idx}\n")
+
+        tasks_to_run: list[SynthesisTask] = []
+        for task in tasks:
+            agent = synth_agents[task.op_name]
+            # Xuanyu's TODO: skip if the solution set is already perfect
+            tasks_to_run.append(task)
         latest_results = asyncio.run(
-            run_synthesis_tasks(synth_agents, tasks, round_idx, library, args)
+            run_synthesis_tasks(synth_agents, tasks_to_run, round_idx, library, args)
         )
+
         if args.meet:
             for result in latest_results:
                 if result.solution_text != "NO_IMPROVEMENT" and _is_fully_sound(
                     result.eval_summary
                 ):
-                    agent = synth_agents[result.task.op_name]
-                    agent.solution_set.upd_solution(result.solution_text)
+                    synth_agents[result.task.op_name].solution_set.upd_solution(
+                        result.solution_text
+                    )
+        else:
+            for result in latest_results:
+                solution_set = synth_agents[result.task.op_name].solution_set
+                solution_set.solutions = [result.solution_text]
+                solution_set._base_result_cache = None
 
         # Xuanyu: maybe when meet is enabled, not only the latest solution but the entire solution set should be sent to the library learning.
         if round_idx < num_rounds and not args.no_learn:
@@ -97,6 +110,16 @@ def run_library_learning_loop(
                     )
                     new_results.append(new_result)
                 latest_results = new_results
+
+    for op_name, agent in synth_agents.items():
+        try:
+            final_solution = agent.solution_set.build_final_solution()
+            final_solution_path = output_dir / f"final_solution_{op_name.lower()}.mlir"
+            final_solution_path.write_text(final_solution)
+            print(f"[{op_name.upper()}] Final solution: {final_solution_path}")
+        except Exception as e:
+            print(f"[{op_name.upper()}] Failed to build final solution: {e}")
+
     return library, latest_results
 
 
@@ -114,10 +137,6 @@ def main():
 
     final_library, latest_results = run_library_learning_loop(
         tasks, args.rounds, initial_library, args, api_key
-    )
-    print(
-        f"Library learning complete: version={args.rounds}, "
-        f"latest_results={len(latest_results)}"
     )
 
     return 0
