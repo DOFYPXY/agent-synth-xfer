@@ -55,7 +55,7 @@ def get_solution(p: Path, d: AbstractDomain) -> FuncOp:
     return get_fns(sol_mod)["solution"]
 
 
-def parse_mlir_func(p: str | _Readable) -> FuncOp:
+def parse_mlir_func(p: _Readable) -> FuncOp:
     func_name = "<text>" if isinstance(p, str) else p.name
     mod = parse_mlir(p)
 

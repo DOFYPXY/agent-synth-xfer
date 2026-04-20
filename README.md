@@ -74,6 +74,17 @@ Final Soln   | Exact 96.7078% | 3 solutions |
 
 The command reads the MLIR program `mlir/Operations/And.mlir` and writes addtional output infor into `outputs/KnownBits_And/`.
 
+### Dataset-Driven Run
+
+Use an existing input dataset (metadata in the TSV determines op/domain/bitwidth workloads):
+
+```bash
+sxf --input knownbits_and_input_data.tsv \
+    --num-iters 2                        \
+    --num-steps 100                      \
+    --num-mcmc 50
+```
+
 ### Full Experiment Setup
 
 This is a more comprehensive invocation closer to the experiment setup used in the paper (this can take up to an hour depending on your machine):
@@ -94,6 +105,7 @@ sxf --op mlir/Operations/Add.mlir     \
 | CLI flag                         | Description                                                                                                                                                                          |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `--op <path>`                    | Path to a concrete operation or pattern (`.mlir` file) to synthesize an abstract transformer for.                                                                                    |
+| `-i, --input <path>`             | Path to an existing dataset TSV. In dataset mode, op/domain/bitwidth workloads are read from dataset metadata.                                                                       |
 | `--benchmark <path>`             | Path to a benchmark YAML file. Runs multiple synthesis jobs in parallel using the per-domain, per-arity settings from the file.                                                      |
 | `-o <path>`                      | Output directory where synthesized results and intermediate outputs will be written.                                                                                                 |
 | `--seed <int>`                   | Seed for the random number generator to make runs reproducible.                                                                                                                      |
@@ -115,6 +127,8 @@ sxf --op mlir/Operations/Add.mlir     \
 Exactly one of `--op` or `--benchmark` must be provided.
 
 When using `--benchmark`, the bitwidth controls come from the YAML file rather than the command line.
+
+When using `--input`, do not pass `--op`, `--domain`, `--benchmark`, `--lbw`, `--mbw`, or `--hbw`.
 
 ### Benchmark Configs
 
@@ -261,87 +275,6 @@ pattern analyze --pattern mlir/Patterns/008.mlir --domain KnownBits
 ```
 
 ### `pattern make-sequential`
-Should produce:
-```
-Exact bw: (8, 5000)
-Norm bw:  (64, 5000, 5000)
-      Domain   Op  Top Exact %  Synth Exact %  Top Norm  Synth Norm
-0  KnownBits  And         4.02          100.0   2494.34           0
-```
-
-(With small differences due to RNG).
-
-## Agent Synthesis
-
-LLM-based synthesis of transfer functions using the **OpenAI Agent API** with an eval tool; the agent can iterate until the transformer passes eval.
-
-**Setup:** Set your OpenAI API key in the `.env` file, then run `source .env` (or set `OPENAI_API_KEY` in the environment).
-
-**Run** (make sure you re-run pip install)
-```bash
-agent-synth mlir/Operations/Add.mlir -o outputs/ag --model gpt-5.1-codex-mini --dump-agent-run
-```
-You can omit `--dump-agent-run` if you don't need the full run dump.
-
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `op_file` | Operation MLIR file(s) (e.g. `mlir/Operations/And.mlir mlir/Operations/Or.mlir`). Mutually exclusive with `--benchmark`. |
-| `--benchmark` | Path to a `bench.yaml` file specifying ops per domain (see below). Mutually exclusive with `op_file`. |
-| `-o, --output` | Output directory (default: `outputs/agent`). |
-| `--model` | OpenAI model (default: `gpt-4`). See [OpenAI pricing](https://developers.openai.com/api/docs/pricing). |
-| `--skip-eval` | Skip running eval-final after synthesis. |
-| `--dump-agent-run` | Write a full dump of the agent run (messages, tool calls, token usage) to the output dir. |
-| `--rounds` | Number of library-update rounds; `0` = synthesis-only (default: `0`). |
-| `--meet` | Accumulate solutions across rounds into a `SolutionSet` and combine them via meet. |
-| `--no-learn` | Skip the library learning step after each synthesis round. |
-
-**Using `--benchmark` with a `bench.yaml` file:**
-
-Instead of listing MLIR files on the command line, you can specify operations in a YAML file:
-
-```yaml
-# bench.yaml
-KnownBits:
-  concrete_ops: [And, Or]
-```
-
-Then run:
-```bash
-agent-synth --benchmark bench.yaml -o outputs/test-lib/ --model gpt-5.1-codex-mini --dump-agent-run --rounds 2
-```
-
-Op names in `concrete_ops` are resolved to `mlir/Operations/{Name}.mlir` relative to the project root.
-
-Each run prints the **model** in use and **token usage** (input/output/reasoning and total). The agent is prompted to reason about the operation and KnownBits before writing MLIR and to use multiple turns to improve quality rather than stopping at the first candidate that passes eval.
-
-### Meet Mode
-
-`--meet` enables meet-combination across synthesis rounds: each round's best solution is accumulated into a `SolutionSet`, and the final result is the meet of all collected solutions. This typically yields a more precise transformer than any single round alone.
-
-`--no-learn` disables library learning between rounds, which is useful when you want to test meet-combination in isolation or when you don't yet have a library to update.
-
-Single-op run with meet mode and no library learning (fast test):
-```bash
-agent-synth mlir/Operations/Umax.mlir \
-    -o outputs/umax                   \
-    --model gpt-5.1-codex-mini        \
-    --rounds 3                        \
-    --meet                            \
-    --no-learn
-```
-
-Multi-op run with meet mode and library learning enabled:
-```bash
-agent-synth mlir/Operations/Umin.mlir mlir/Operations/Umax.mlir \
-    -o outputs/meet-test              \
-    --model gpt-5.1-codex-mini        \
-    --rounds 3                        \
-    --meet
-```
-
-## Important CLI Options for `simplifier`
 
 | CLI flag              | Description                                                                                                 |
 |-----------------------|-------------------------------------------------------------------------------------------------------------|
@@ -428,4 +361,76 @@ Example:
 max-precise --op mlir/Operations/Or.mlir --bw 4 -d KnownBits --args "00??; 11??"
 # or
 max-precise --op mlir/Operations/Add.mlir --bw 4 -d UConstRange --args="[5, 10]; [2, 3]"
+```
+
+
+
+## Agent Synthesis
+
+LLM-based synthesis of transfer functions using the **OpenAI Agent API** with an eval tool; the agent can iterate until the transformer passes eval.
+
+**Setup:** Set your OpenAI API key in the `.env` file, then run `source .env` (or set `OPENAI_API_KEY` in the environment).
+
+**Run** (make sure you re-run pip install)
+```bash
+agent-synth mlir/Operations/Add.mlir -o outputs/ag --model gpt-5.1-codex-mini --dump-agent-run
+```
+You can omit `--dump-agent-run` if you don't need the full run dump.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `op_file` | Operation MLIR file(s) (e.g. `mlir/Operations/And.mlir mlir/Operations/Or.mlir`). Mutually exclusive with `--benchmark`. |
+| `--benchmark` | Path to a `bench.yaml` file specifying ops per domain (see below). Mutually exclusive with `op_file`. |
+| `-o, --output` | Output directory (default: `outputs/agent`). |
+| `--model` | OpenAI model (default: `gpt-4`). See [OpenAI pricing](https://developers.openai.com/api/docs/pricing). |
+| `--skip-eval` | Skip running eval-final after synthesis. |
+| `--dump-agent-run` | Write a full dump of the agent run (messages, tool calls, token usage) to the output dir. |
+| `--rounds` | Number of library-update rounds; `0` = synthesis-only (default: `0`). |
+| `--meet` | Accumulate solutions across rounds into a `SolutionSet` and combine them via meet. |
+| `--no-learn` | Skip the library learning step after each synthesis round. |
+
+**Using `--benchmark` with a `bench.yaml` file:**
+
+Instead of listing MLIR files on the command line, you can specify operations in a YAML file:
+
+```yaml
+# bench.yaml
+KnownBits:
+  concrete_ops: [And, Or]
+```
+
+Then run:
+```bash
+agent-synth --benchmark bench.yaml -o outputs/test-lib/ --model gpt-5.1-codex-mini --dump-agent-run --rounds 2
+```
+
+Op names in `concrete_ops` are resolved to `mlir/Operations/{Name}.mlir` relative to the project root.
+
+Each run prints the **model** in use and **token usage** (input/output/reasoning and total). The agent is prompted to reason about the operation and KnownBits before writing MLIR and to use multiple turns to improve quality rather than stopping at the first candidate that passes eval.
+
+### Meet Mode
+
+`--meet` enables meet-combination across synthesis rounds: each round's best solution is accumulated into a `SolutionSet`, and the final result is the meet of all collected solutions. This typically yields a more precise transformer than any single round alone.
+
+`--no-learn` disables library learning between rounds, which is useful when you want to test meet-combination in isolation or when you don't yet have a library to update.
+
+Single-op run with meet mode and no library learning (fast test):
+```bash
+agent-synth mlir/Operations/Umax.mlir \
+    -o outputs/umax                   \
+    --model gpt-5.1-codex-mini        \
+    --rounds 3                        \
+    --meet                            \
+    --no-learn
+```
+
+Multi-op run with meet mode and library learning enabled:
+```bash
+agent-synth mlir/Operations/Umin.mlir mlir/Operations/Umax.mlir \
+    -o outputs/meet-test              \
+    --model gpt-5.1-codex-mini        \
+    --rounds 3                        \
+    --meet
 ```

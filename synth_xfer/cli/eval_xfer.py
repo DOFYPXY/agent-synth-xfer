@@ -12,7 +12,7 @@ from synth_xfer._util.eval_result import PerBitRes
 from synth_xfer._util.jit import Jit
 from synth_xfer._util.lower import LowerToLLVM
 from synth_xfer._util.parse_mlir import get_helper_funcs, top_as_xfer
-from synth_xfer._util.tsv import EnumData, build_enum_data
+from synth_xfer._util.tsv import EnumData, build_enum_data, resolve_dataset_op_path
 from synth_xfer._util.xfer_data import (
     PreparedCandidates,
     XferCandidate,
@@ -253,6 +253,7 @@ def _eval_group(group: EvalGroup, args: Namespace) -> list[OutputRow]:
     selected_to_eval = {exact_bw: to_eval[exact_bw]}
     if dist_bw != exact_bw:
         selected_to_eval[dist_bw] = to_eval[dist_bw]
+    low_and_med_bw = {exact_bw}
 
     helpers = get_helper_funcs(group.op_path, group.domain)
     top_mlir = top_as_xfer(helpers.transfer_func)
@@ -278,6 +279,7 @@ def _eval_group(group: EvalGroup, args: Namespace) -> list[OutputRow]:
                 )
                 for bw, values in selected_to_eval.items()
             },
+            low_and_med_bw=low_and_med_bw,
             unsound_ex=args.unsound_ex,
             imprecise_ex=args.imprecise_ex,
         )
@@ -315,13 +317,7 @@ def _dataset_groups(candidates: list[XferCandidate], args: Namespace) -> EvalGro
     with args.input.open("r") as f:
         data = EnumData.read_tsv(f)
 
-    mlir_dir = Path(__file__).resolve().parents[2] / "mlir"
-    mid_dir = "Patterns" if str(data.metadata.op).isnumeric() else "Operations"
-    fname = f"{data.metadata.op}.mlir"
-    op_path = mlir_dir / mid_dir / fname
-
-    if not op_path.is_file():
-        raise FileNotFoundError(f"Could not find mlir op: {op_path}")
+    op_path = resolve_dataset_op_path(data.metadata.op)
     return EvalGroup.from_candidates(data.metadata.domain, op_path, candidates, data)
 
 
