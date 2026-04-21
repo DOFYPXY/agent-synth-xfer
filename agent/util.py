@@ -318,8 +318,8 @@ def _run_eval(
     lib:  library helper functions.
     """
     lbw, mbw, hbw = eval_args.lbw, eval_args.mbw, eval_args.hbw
-    all_bws = lbw + [x[0] for x in mbw] + [x[0] for x in hbw]
-    EvalResult.init_bw_settings(set(lbw), set(x[0] for x in mbw), set(x[0] for x in hbw))
+    all_bws = list(set(lbw) | set(x[0] for x in mbw) | set(x[0] for x in hbw))
+    low_and_med_bw = set(lbw) | set(x[0] for x in mbw)
     sampler = Sampler.uniform()
 
     base_names = [_get_xfer_name(s) for s in base]
@@ -359,7 +359,7 @@ def _run_eval(
             for bw in all_bws
         }
         (result,) = eval_transfer_func(
-            eval_input, eval_args.unsound_ex, eval_args.imprecise_ex
+            eval_input, low_and_med_bw, eval_args.unsound_ex, eval_args.imprecise_ex
         )
 
     return result
