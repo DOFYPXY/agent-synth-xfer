@@ -19,8 +19,9 @@ from .util import (
     SynthesisTask,
     clean_llm_output,
     eval_transformer,
-    print_token_usage,
+    get_op_output_dir,
     save_file,
+    summarize_token_usage,
 )
 
 
@@ -35,7 +36,7 @@ def build_agent_instructions(
 ) -> str:
     """Instantiate agent_instructions.md template with task-specific values."""
     instructions = template.replace("<OP>", op_name)
-    instructions = instructions.replace("<op>", op_name.lower())
+    instructions = instructions.replace("<op>", op_name)
     instructions = instructions.replace("<OP_FILE>", op_file)
     return instructions
 
@@ -54,8 +55,9 @@ class SynthesisAgent:
         self._task = task
         self._args = args
         self._library = current_lib
-        self._history: list[Any] | None = None
         self._soln_iters: list[str] = []
+        self._current_round: int = 0
+        self._eval_call_idx: int = 0
         self._eval_args = eval_args_override or EvalArgs(
             op_path=Path(task.op_file),
             domain=AbstractDomain.KnownBits,
@@ -259,25 +261,40 @@ class SynthesisAgent:
             Updated:  Sound/Exact/Dist after adding your candidate via meet
 
             Each line has the format: Sound %: ..., Exact %: ..., Dist: ...
+            - Sound %: fraction of inputs where the abstract output is sound
+            - Exact %: fraction where the result matches the optimal transfer (full precision)
+            - Dist: sound-distance metric for this eval
             An improvement shows higher Exact % or lower Dist on the Updated line.
 
             If the combined transformer is not fully sound or not fully precise, following lines may includeshort legend and up to a few concrete counterexamples per bitwidth (unsound vs imprecise labeled with bw=..., so you can see inputs, your abstract output, and the optimal abstract output.
             """
 
             print(f"[{task.op_name.upper()}] [TOOL] run_eval_improve:", flush=True)
-            try:
-                result = self.solution_set.eval_improve(
-                    transformer_mlir,
-                    self._eval_args,
-                )
-            except Exception as e:
-                msg = str(e).strip() or repr(e) or type(e).__name__
-                result = f"error: {' '.join(msg.splitlines())[:1500]}"
+            summary, eval_result = self.solution_set.eval_improve(
+                transformer_mlir,
+                self._eval_args,
+            )
             print(
-                f"[{task.op_name.upper()}] [TOOL] run_eval_improve result:\n{result}",
+                f"[{task.op_name.upper()}] [TOOL] run_eval_improve result:\n{summary}",
                 flush=True,
             )
-            return result
+
+            round_tag = f"r{self._current_round}"
+            call_tag = f"{self._eval_call_idx:03d}"
+            self._eval_call_idx += 1
+            op_output_dir = get_op_output_dir(Path(self._args.output), task.op_name)
+            _ = save_file(
+                transformer_mlir,
+                op_output_dir,
+                f"xfer_{round_tag}_{task.op_name}_{call_tag}.mlir",
+            )
+            _ = save_file(
+                summary, op_output_dir, f"eval_{round_tag}_{task.op_name}_{call_tag}.txt"
+            )
+            if eval_result and eval_result.is_sound():
+                self._soln_iters.append(transformer_mlir)
+
+            return summary
 
         return Agent(
             name="TransformerSynthesizer",
@@ -307,7 +324,9 @@ class SynthesisAgent:
     async def run(self, round_num: int) -> tuple[str, object, Any, list[str]]:
         """Run one synthesis round. Returns (final_output, run_result, inp, evalled_transformers)."""
         self._soln_iters = []
-        if self._history is None:
+        self._current_round = round_num
+        self._eval_call_idx = 0
+        if round_num <= 0:
             user_content = f"{_make_initial_prompt(self._task)}\n"
         else:
             user_content = (
@@ -318,11 +337,8 @@ class SynthesisAgent:
                 "applicable."
             )
         user_content += f"\nYou have a maximum of {self._args.max_turns} iterations to complete this task, If you are going to exceed the limit, return the current MLIR you have generated."
-        inp: list[Any] = (self._history or []) + [
-            {"role": "user", "content": user_content}
-        ]
+        inp: list[Any] = [{"role": "user", "content": user_content}]
         result = await Runner.run(self._agent, inp, max_turns=self._args.max_turns)
-        self._history = result.to_input_list()
         return result.final_output, result, inp, list(self._soln_iters)
 
 
@@ -338,6 +354,7 @@ async def run_single_synthesis_task(
     print(f"{tag} Synthesizing: round={round_num}, op={task.op_name}")
 
     output_dir = Path(args.output)
+    op_output_dir = get_op_output_dir(output_dir, task.op_name)
 
     run_result = None
     agent_input = None
@@ -354,18 +371,18 @@ async def run_single_synthesis_task(
     if not args.mock_synth:
         if args.dump_agent_run:
             dump_path = save_file(
-                format_agent_run_dump(run_result),
-                output_dir,
-                f"synth_agent_r{round_num}_{task.op_name.lower()}.log",
+                format_agent_run_dump(run_result, args.synth_model),
+                op_output_dir,
+                f"synth_agent_r{round_num}_{task.op_name}.log",
             )
             print(f"{tag} Agent run dump: {dump_path}")
 
-        print_token_usage(run_result)
+        print(f"{tag} Token usage: {summarize_token_usage(run_result, args.synth_model)}")
 
     transformer_file = save_file(
         clean_llm_output(llm_output),
-        output_dir,
-        f"kb_r{round_num}_{task.op_name.lower()}.mlir",
+        op_output_dir,
+        f"xfer_r{round_num}_{task.op_name}.mlir",
     )
     print(f"{tag} Transformer: {transformer_file}")
 
@@ -374,7 +391,7 @@ async def run_single_synthesis_task(
     print(f"{tag} Evaluating transformer...")
     eval_t0 = time.monotonic()
     if args.meet:
-        eval_summary = synth_agent.solution_set.eval_improve(
+        eval_summary, _ = synth_agent.solution_set.eval_improve(
             solution_text,
             synth_agent._eval_args,
             no_previous=True,
@@ -389,8 +406,8 @@ async def run_single_synthesis_task(
     print(f"{tag} Eval result: {eval_summary}")
     save_file(
         f"synthesis_time: {synthesis_time:.2f}s\neval_time: {eval_time:.2f}s\n\n{eval_summary}",
-        output_dir,
-        f"eval_r{round_num}_{task.op_name.lower()}.txt",
+        op_output_dir,
+        f"eval_r{round_num}_{task.op_name}.txt",
     )
 
     return SynthesisResult(
