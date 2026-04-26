@@ -391,13 +391,13 @@ async def run_single_synthesis_task(
     print(f"{tag} Evaluating transformer...")
     eval_t0 = time.monotonic()
     if args.meet:
-        eval_summary, _ = synth_agent.solution_set.eval_improve(
+        eval_summary, eval_result = synth_agent.solution_set.eval_improve(
             solution_text,
             synth_agent._eval_args,
             no_previous=True,
         )
     else:
-        eval_summary, _ = eval_transformer(
+        eval_summary, eval_result = eval_transformer(
             [solution_text],
             synth_agent._eval_args,
             lib=[func.source for func in library.functions],
@@ -416,6 +416,7 @@ async def run_single_synthesis_task(
         solution_iters=soln_iters,
         transformer_path=transformer_file,
         eval_summary=eval_summary,
+        eval_result=eval_result,
     )
 
 

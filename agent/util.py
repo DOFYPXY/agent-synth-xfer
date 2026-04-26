@@ -57,6 +57,7 @@ class SynthesisResult:
     solution_iters: list[str]
     transformer_path: Path
     eval_summary: str
+    eval_result: EvalResult | None = None
 
 
 class LibraryFunction(BaseModel):
