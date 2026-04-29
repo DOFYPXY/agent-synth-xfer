@@ -35,6 +35,8 @@ def _run_agent_compress(
 
     def get_target_file() -> str:
         """Get the MLIR code of the file to compress"""
+        if target.solution_text is None:
+            raise ValueError("target solution text is unavailable")
         return target.solution_text
 
     def get_available_primitives() -> str:
@@ -166,8 +168,7 @@ def run_compress_task(
 
     return SynthesisResult(
         task=target.task,
-        solution_text=target_text,
-        solution_iters=target.solution_iters,
+        solution_iters=[*target.solution_iters, target_text],
         transformer_path=target.transformer_path,
         eval_summary=target.eval_summary,
     )
