@@ -149,11 +149,6 @@ def parse_args() -> argparse.Namespace:
         help="OpenAI model used for library learning",
     )
     parser.add_argument(
-        "--dump-agent-run",
-        action="store_true",
-        help="Dump full agent run (messages, tool calls, outputs) to output dir",
-    )
-    parser.add_argument(
         "--stitch",
         action="store_true",
         help="Run library learning with Stitch",

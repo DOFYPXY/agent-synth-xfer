@@ -6,7 +6,6 @@ import re
 
 from agents import Agent, Runner, function_tool
 
-from .agent_helper import format_agent_run_dump
 from .util import (
     EvalArgs,
     LibraryState,
@@ -162,14 +161,6 @@ def run_compress_task(
     print(summary)
 
     target_text = clean_llm_output(llm_output)
-
-    if args.dump_agent_run:
-        dump_path = save_file(
-            format_agent_run_dump(run_result, model=args.library_model),
-            op_output_dir,
-            f"compress_run{round_num}_{op_name}.log",
-        )
-        print(f"Agent run dump: {dump_path}")
 
     transformer_file = save_file(
         target_text,

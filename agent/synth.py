@@ -11,7 +11,6 @@ from agents import Agent, Runner, function_tool
 from agent.agent_solution_set import AgentSolutionSet
 from synth_xfer._util.domain import AbstractDomain
 
-from .agent_helper import format_agent_run_dump
 from .util import (
     EvalArgs,
     LibraryState,
@@ -369,14 +368,6 @@ async def run_single_synthesis_task(
         synthesis_time = time.monotonic() - t0
 
     if not args.mock_synth:
-        if args.dump_agent_run:
-            dump_path = save_file(
-                format_agent_run_dump(run_result, args.synth_model),
-                op_output_dir,
-                f"synth_agent_r{round_num}_{task.op_name}.log",
-            )
-            print(f"{tag} Agent run dump: {dump_path}")
-
         print(f"{tag} Token usage: {summarize_token_usage(run_result, args.synth_model)}")
 
     transformer_file = save_file(

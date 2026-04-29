@@ -9,7 +9,6 @@ from agents import Agent, Runner, function_tool
 from agent.stitch.converter import pattern_to_mlir_program
 from agent.stitch.search import search_patterns
 
-from .agent_helper import format_agent_run_dump
 from .util import (
     FunctionDocumentation,
     LibraryFunction,
@@ -210,27 +209,25 @@ def run_stitch_learn(
         if h.pattern.inst_count >= 2
     ]
 
-    if args.dump_agent_run:
-        hits = [h for h in result.hits if h.pattern.inst_count >= 2]
-        stitch_log = ""
-        for hit in hits:
-            stitch_log += f"=== utility={hit.utility} | size = {hit.pattern.inst_count} | {hit.total_matches} matches ===\n"
-            stitch_log += f"{hit.pattern}\n"
+    hits = [h for h in result.hits if h.pattern.inst_count >= 2]
+    stitch_log = ""
+    for hit in hits:
+        stitch_log += f"=== utility={hit.utility} | size = {hit.pattern.inst_count} | {hit.total_matches} matches ===\n"
+        stitch_log += f"{hit.pattern}\n"
 
-        dump_path = save_file(
-            stitch_log,
-            output_dir,
-            f"stitch_log_{version}.log",
-        )
-        print(f"  Stitch run dump: {dump_path}")
+    dump_path = save_file(
+        stitch_log,
+        output_dir,
+        f"stitch_log_{version}.log",
+    )
+    print(f"  Stitch run dump: {dump_path}")
 
     print(f"  Using model {args.library_model}")
 
     new_lib_funcs: list[LibraryFunction] = []
-    agent_log = ""
     for i, hit in enumerate(mlir_hits):
         print(f"  Documenting function {i + 1}/{len(mlir_hits)}")
-        lib_func, run_result = _name_one_function(
+        lib_func, _ = _name_one_function(
             api_key=api_key,
             model=args.library_model,
             ops_path=args.ops,
@@ -240,16 +237,6 @@ def run_stitch_learn(
             func_to_name=hit,
         )
         new_lib_funcs.append(lib_func)
-        agent_log += f"\n========== Autodoc for {lib_func.function_name} ==========\n"
-        agent_log += format_agent_run_dump(run_result, model=args.library_model)
-
-    if args.dump_agent_run:
-        dump_path = save_file(
-            agent_log,
-            output_dir,
-            f"autodoc_log_{version}.log",
-        )
-        print(f"  Autodoc run dump: {dump_path}")
 
     merged = LibraryState(functions=previous_library.functions + new_lib_funcs)
     lib_dir = output_dir / f"library{version}"
@@ -289,14 +276,6 @@ def run_library_learn_task(
     summary = summarize_token_usage(run_result, model=args.library_model)
     print(summary)
 
-    if args.dump_agent_run:
-        dump_path = save_file(
-            format_agent_run_dump(run_result, model=args.library_model),
-            output_dir,
-            f"learn_agent_{version}.log",
-        )
-        print(f"Agent run dump: {dump_path}")
-
     existing_names = {f.function_name for f in previous_library.functions}
     new_functions = [
         f for f in llm_output.functions if f.function_name not in existing_names
@@ -324,11 +303,6 @@ def main():
         "--library-model",
         default="gpt-5.1-codex-mini",
         help="OpenAI model used for library learning",
-    )
-    parser.add_argument(
-        "--dump-agent-run",
-        action="store_true",
-        help="Dump full agent run (messages, tool calls, outputs) to output dir",
     )
     parser.add_argument(
         "--stitch",
