@@ -4,7 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from agents import Agent, Runner, function_tool
+from pydantic_ai import Agent
+from pydantic_ai.usage import UsageLimits
 
 from agent.stitch.converter import pattern_to_mlir_program
 from agent.stitch.search import search_patterns
@@ -37,7 +38,6 @@ def _run_agent_learn(
     """Run agent to learn library functions. Returns (LibraryState, run_result)."""
     del api_key  # Reserved for future model/provider auth parity.
 
-    @function_tool
     def get_corpus_functions() -> str:
         """Return the corpus MLIR programs to learn library funcs from"""
         corpus = set()
@@ -47,12 +47,10 @@ def _run_agent_learn(
                 corpus.add(soln)
         return "\n".join([str(s) for s in corpus])
 
-    @function_tool
     def get_available_primitives() -> str:
         """Return the allowed primitive operators documentation (agent/ops.md)."""
         return ops_path.read_text(encoding="utf-8")
 
-    @function_tool
     def list_library_functions() -> str:
         """List available library functions as JSON dictionary of func names and docstrings"""
         funcs = {
@@ -60,7 +58,6 @@ def _run_agent_learn(
         }
         return json.dumps(funcs)
 
-    @function_tool
     def get_library_function(name: str) -> str:
         """Return the source of a function by its name"""
         for func in previous_library.functions:
@@ -69,7 +66,6 @@ def _run_agent_learn(
 
         raise ValueError("name must refer to a function in the library")
 
-    @function_tool
     def search_library_functions(query: str, top_k: int = 3) -> str:
         """Search library functions by substring. Returns JSON array of matches with function name and docstring."""
         if top_k <= 0:
@@ -106,9 +102,9 @@ def _run_agent_learn(
         output_type=LibraryState,
     )
 
-    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
+    result = agent.run_sync(prompt, usage_limits=UsageLimits(request_limit=max_turns))
 
-    return (result.final_output, result)
+    return (result.output, result)
 
 
 def _name_one_function(
@@ -125,12 +121,10 @@ def _name_one_function(
 
     prompt = "Name and document the MLIR function. Call get_function_code() to fetch it, look up any func.call callees with get_library_function(), and consult get_primitives() if needed. Return a snake_case function_name and a one-to-two sentence docstring describing what the function computes semantically."
 
-    @function_tool
     def get_function_code() -> str:
         """Return the code of the function to be named and documented"""
         return func_to_name
 
-    @function_tool
     def get_library_function(name: str) -> str:
         """Return the source of a func.call by its name"""
         for func in library.functions:
@@ -139,7 +133,6 @@ def _name_one_function(
 
         raise ValueError("name must refer to a function in the library")
 
-    @function_tool
     def get_primitives() -> str:
         """Return the primitive operators documentation (agent/ops.md)."""
         return ops_path.read_text(encoding="utf-8")
@@ -156,7 +149,7 @@ def _name_one_function(
         output_type=FunctionDocumentation,
     )
 
-    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
+    result = agent.run_sync(prompt, usage_limits=UsageLimits(request_limit=max_turns))
 
     def _reformat_source(source: str, func_name: str, docstring: str) -> str:
         """Takes in MLIR function, sets name to func_name, and adds docstring"""
@@ -167,12 +160,12 @@ def _name_one_function(
 
     new_source = _reformat_source(
         source=func_to_name,
-        func_name=result.final_output.function_name,
-        docstring=result.final_output.docstring,
+        func_name=result.output.function_name,
+        docstring=result.output.docstring,
     )
     lib_func = LibraryFunction(
-        function_name=result.final_output.function_name,
-        docstring=result.final_output.docstring,
+        function_name=result.output.function_name,
+        docstring=result.output.docstring,
         source=new_source,
     )
 
@@ -273,7 +266,7 @@ def run_library_learn_task(
         max_turns=args.max_turns,
     )
 
-    summary = summarize_token_usage(run_result, model=args.library_model)
+    summary = summarize_token_usage(run_result)
     print(summary)
 
     existing_names = {f.function_name for f in previous_library.functions}
@@ -301,8 +294,8 @@ def main():
     )
     parser.add_argument(
         "--library-model",
-        default="gpt-5.1-codex-mini",
-        help="OpenAI model used for library learning",
+        default="openai-responses:gpt-5.1-codex-mini",
+        help="Pydantic AI model string for library learning (e.g. 'openai-responses:gpt-5.1-codex-mini', 'openai:gpt-4o', 'anthropic:claude-sonnet-4-5')",
     )
     parser.add_argument(
         "--stitch",

@@ -6,7 +6,8 @@ from pathlib import Path
 import time
 from typing import Any
 
-from agents import Agent, Runner, function_tool
+from pydantic_ai import Agent
+from pydantic_ai.usage import UsageLimits
 
 from agent.agent_solution_set import AgentSolutionSet
 from synth_xfer._util.domain import AbstractDomain
@@ -84,7 +85,6 @@ class SynthesisAgent:
             args.meet_instructions if args.meet else args.agent_instructions
         )
 
-        @function_tool
         def get_task_bundle() -> str:
             """Return JSON with op_name, op_file, and op_content.
 
@@ -101,19 +101,16 @@ class SynthesisAgent:
             }
             return json.dumps(bundle)
 
-        @function_tool
         def get_program_templates() -> str:
             """Return the MLIR output templates (agent/template.mlir)."""
             print(f"[{task.op_name.upper()}] [TOOL] get_program_templates", flush=True)
             return template_path.read_text(encoding="utf-8")
 
-        @function_tool
         def get_available_primitives() -> str:
             """Return the allowed primitive operators documentation (agent/ops.md)."""
             print(f"[{task.op_name.upper()}] [TOOL] get_available_primitives", flush=True)
             return ops_path.read_text(encoding="utf-8")
 
-        @function_tool
         def list_library_functions() -> str:
             """List available library functions as JSON dictionary of func names and docstrings"""
             print(f"[{task.op_name.upper()}] [TOOL] list_library_functions", flush=True)
@@ -122,7 +119,6 @@ class SynthesisAgent:
             }
             return json.dumps(funcs)
 
-        @function_tool
         def get_library_function(name: str) -> str:
             """Return the source of a function by its name"""
             print(
@@ -135,7 +131,6 @@ class SynthesisAgent:
 
             raise ValueError("name must refer to a function in the library")
 
-        @function_tool
         def search_library_functions(query: str, top_k: int = 3) -> str:
             """Search inside library functions by substring 'query' to understand how specific operators are used. Returns JSON array of matches with function name and docstring."""
             # Xuanyu: I am not sure whether this tool is actually useful, since search_examples show usage of operators.
@@ -163,7 +158,6 @@ class SynthesisAgent:
                     break
             return json.dumps(matches)
 
-        @function_tool
         def list_examples() -> str:
             """List available example transformer files as JSON array of filenames."""
             print(f"[{task.op_name.upper()}] [TOOL] list_examples", flush=True)
@@ -174,7 +168,6 @@ class SynthesisAgent:
             )
             return json.dumps(names)
 
-        @function_tool
         def get_example(name: str) -> str:
             """Return the contents of one example transformer file by filename (e.g. 'kb_xor.mlir')."""
             print(f"[{task.op_name.upper()}] [TOOL] get_example: {name!r}", flush=True)
@@ -188,7 +181,6 @@ class SynthesisAgent:
                 raise ValueError("example must be a .mlir file")
             return p.read_text(encoding="utf-8")
 
-        @function_tool
         def search_examples(query: str, top_k: int = 3) -> str:
             """Search inside reference implementations by substring 'query' to understand the usage of operators. Returns JSON array of matches with filename and snippet."""
             print(
@@ -219,7 +211,6 @@ class SynthesisAgent:
                     break
             return json.dumps(matches)
 
-        @function_tool
         def run_eval_tool(transformer_mlir: str) -> str:
             """Evaluate the generated transformer MLIR for the current operation (e.g. kb_<op>). Pass the raw MLIR code as a string. Uses `--exact-bw` bitwidths from the CLI (default 8).
 
@@ -244,7 +235,6 @@ class SynthesisAgent:
                 self._soln_iters.append(transformer_mlir)
             return summary
 
-        @function_tool
         def get_existing_solutions() -> str:
             """Return the MLIR source of all solutions currently in the solution set. Each solution will be combined with your candidate via meet when eval_improve is called. Use this to understand what cases are already covered before writing a new candidate."""
             print(f"[{task.op_name.upper()}] [TOOL] get_existing_solutions", flush=True)
@@ -252,7 +242,6 @@ class SynthesisAgent:
                 return "No solutions in the solution set yet."
             return "\n\n".join(self.solution_set.solutions)
 
-        @function_tool
         def run_eval_improve(transformer_mlir: str) -> str:
             """Evaluate the transformer MLIR combined with all previously accepted solutions via meet. Returns two summary lines so you can compare before and after:
 
@@ -336,9 +325,11 @@ class SynthesisAgent:
                 "applicable."
             )
         user_content += f"\nYou have a maximum of {self._args.max_turns} iterations to complete this task, If you are going to exceed the limit, return the current MLIR you have generated."
-        inp: list[Any] = [{"role": "user", "content": user_content}]
-        result = await Runner.run(self._agent, inp, max_turns=self._args.max_turns)
-        return result.final_output, result, inp, list(self._soln_iters)
+        result = await self._agent.run(
+            user_content,
+            usage_limits=UsageLimits(request_limit=self._args.max_turns),
+        )
+        return result.output, result, user_content, list(self._soln_iters)
 
 
 async def run_single_synthesis_task(
@@ -368,7 +359,7 @@ async def run_single_synthesis_task(
         synthesis_time = time.monotonic() - t0
 
     if not args.mock_synth:
-        print(f"{tag} Token usage: {summarize_token_usage(run_result, args.synth_model)}")
+        print(f"{tag} {summarize_token_usage(run_result)}")
 
     transformer_file = save_file(
         clean_llm_output(llm_output),
