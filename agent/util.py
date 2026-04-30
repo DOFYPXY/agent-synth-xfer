@@ -44,7 +44,7 @@ class SynthesisResult:
 
     task: SynthesisTask
     solution_iters: list[str]
-    eval_summary: str
+    eval_summary: str | None
     eval_result: EvalResult | None = None
 
     @property
