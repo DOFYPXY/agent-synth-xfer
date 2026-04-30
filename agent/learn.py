@@ -44,6 +44,9 @@ def _run_agent_learn(
         for result in synthesis_results:
             for soln in result.solution_iters:
                 corpus.add(soln)
+        print(
+            f"[LIBRARY] [TOOL] get_corpus_functions: {len(corpus)} programs", flush=True
+        )
         return "\n".join([str(s) for s in corpus])
 
     def get_available_primitives() -> str:
