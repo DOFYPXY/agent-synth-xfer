@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.usage import UsageLimits
 
 from agent.agent_solution_set import AgentSolutionSet
@@ -323,11 +324,19 @@ class SynthesisAgent:
                 "functions, then revise your solution to reuse them where "
                 "applicable."
             )
-        user_content += f"\nYou have a maximum of {self._args.max_turns} iterations to complete this task, If you are going to exceed the limit, return the current MLIR you have generated."
-        result = await self._agent.run(
-            user_content,
-            usage_limits=UsageLimits(request_limit=self._args.max_turns),
-        )
+        soft_limit = self._args.max_turns - 2
+        user_content += f"\nYou have at most {soft_limit} iterations to complete this task. If you are about to exceed this limit, stop and return the MLIR solution you have generated so far."
+        try:
+            result = await self._agent.run(
+                user_content,
+                usage_limits=UsageLimits(request_limit=self._args.max_turns),
+            )
+        except UsageLimitExceeded as e:
+            print(
+                f"[{self._task.op_name.upper()}] Request limit hit ({e}); "
+                f"returning {len(self._soln_iters)} solution(s) collected so far."
+            )
+            result = None
         return result, list(self._soln_iters)
 
 
@@ -355,7 +364,7 @@ async def run_single_synthesis_task(
         run_result, soln_iters = await synth_agent.run(round_num)
         synthesis_time = time.monotonic() - t0
 
-    if not args.mock_synth:
+    if not args.mock_synth and run_result is not None:
         print(f"{tag} {summarize_token_usage(run_result)}")
     
     if soln_iters == []:
@@ -370,13 +379,13 @@ async def run_single_synthesis_task(
     print(f"{tag} Evaluating transformer...")
     eval_t0 = time.monotonic()
     if args.meet:
-        eval_summary, _ = synth_agent.solution_set.eval_improve(
+        eval_summary, eval_result = synth_agent.solution_set.eval_improve(
             soln_iters[-1],
             synth_agent._eval_args,
             no_previous=True,
         )
     else:
-        eval_summary, _ = eval_transformer(
+        eval_summary, eval_result = eval_transformer(
             [soln_iters[-1]],
             synth_agent._eval_args,
             lib=[func.source for func in library.functions],
@@ -393,6 +402,7 @@ async def run_single_synthesis_task(
         task=task,
         solution_iters=soln_iters,
         eval_summary=eval_summary,
+        eval_result=eval_result,
     )
 
 
