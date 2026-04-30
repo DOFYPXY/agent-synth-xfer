@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.usage import UsageLimits
 
 from agent.stitch.converter import pattern_to_mlir_program
@@ -104,7 +105,22 @@ def _run_agent_learn(
         output_type=LibraryState,
     )
 
-    result = agent.run_sync(prompt, usage_limits=UsageLimits(request_limit=max_turns))
+    soft_limit = max_turns - 2
+    prompt_with_limit = (
+        f"{prompt}\nYou have at most {soft_limit} iterations to complete this task. "
+        "If you are about to exceed this limit, stop and return the library you have "
+        "generated so far."
+    )
+    try:
+        result = agent.run_sync(
+            prompt_with_limit, usage_limits=UsageLimits(request_limit=max_turns)
+        )
+    except UsageLimitExceeded as e:
+        print(
+            f"[LIBRARY] Request limit hit ({e}); "
+            "returning previous library unchanged."
+        )
+        return (previous_library, None)
 
     return (result.output, result)
 
@@ -117,11 +133,21 @@ def _name_one_function(
     max_turns: int,
     library: LibraryState,
     func_to_name: str,
-) -> tuple[LibraryFunction, object]:
+) -> tuple[LibraryFunction | None, object]:
     """Given the source for an MLIR function, provide a name and docstring for it agentically."""
     del api_key  # Reserved for future model/provider auth parity.
 
-    prompt = "Name and document the MLIR function. Call get_function_code() to fetch it, look up any func.call callees with get_library_function(), and consult get_primitives() if needed. Return a snake_case function_name and a one-to-two sentence docstring describing what the function computes semantically."
+    soft_limit = max_turns - 2
+    prompt = (
+        "Name and document the MLIR function. Call get_function_code() to fetch it, "
+        "look up any func.call callees with get_library_function(), and consult "
+        "get_primitives() if needed. Return a snake_case function_name and a "
+        "one-to-two sentence docstring describing what the function computes "
+        "semantically."
+        f"\nYou have at most {soft_limit} iterations to complete this task. If you "
+        "are about to exceed this limit, stop and return the function_name and "
+        "docstring you have so far."
+    )
 
     def get_function_code() -> str:
         """Return the code of the function to be named and documented"""
@@ -151,7 +177,16 @@ def _name_one_function(
         output_type=FunctionDocumentation,
     )
 
-    result = agent.run_sync(prompt, usage_limits=UsageLimits(request_limit=max_turns))
+    try:
+        result = agent.run_sync(
+            prompt, usage_limits=UsageLimits(request_limit=max_turns)
+        )
+    except UsageLimitExceeded as e:
+        print(
+            f"[LIBRARY] Request limit hit while documenting function ({e}); "
+            "skipping this function."
+        )
+        return (None, None)
 
     def _reformat_source(source: str, func_name: str, docstring: str) -> str:
         """Takes in MLIR function, sets name to func_name, and adds docstring"""
@@ -230,7 +265,8 @@ def run_stitch_learn(
             library=previous_library,
             func_to_name=hit,
         )
-        new_lib_funcs.append(lib_func)
+        if lib_func is not None:
+            new_lib_funcs.append(lib_func)
 
     merged = LibraryState(functions=previous_library.functions + new_lib_funcs)
     lib_dir = output_dir / f"library{version}"
@@ -267,8 +303,9 @@ def run_library_learn_task(
         max_turns=args.max_turns,
     )
 
-    summary = summarize_token_usage(run_result)
-    print(summary)
+    if run_result is not None:
+        summary = summarize_token_usage(run_result)
+        print(summary)
 
     existing_names = {f.function_name for f in previous_library.functions}
     new_functions = [
