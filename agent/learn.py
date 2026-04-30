@@ -116,10 +116,7 @@ def _run_agent_learn(
             prompt_with_limit, usage_limits=UsageLimits(request_limit=max_turns)
         )
     except UsageLimitExceeded as e:
-        print(
-            f"[LIBRARY] Request limit hit ({e}); "
-            "returning previous library unchanged."
-        )
+        print(f"[LIBRARY] Request limit hit ({e}); returning previous library unchanged.")
         return (previous_library, None)
 
     return (result.output, result)
@@ -178,9 +175,7 @@ def _name_one_function(
     )
 
     try:
-        result = agent.run_sync(
-            prompt, usage_limits=UsageLimits(request_limit=max_turns)
-        )
+        result = agent.run_sync(prompt, usage_limits=UsageLimits(request_limit=max_turns))
     except UsageLimitExceeded as e:
         print(
             f"[LIBRARY] Request limit hit while documenting function ({e}); "
