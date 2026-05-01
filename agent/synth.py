@@ -93,6 +93,8 @@ class SynthesisAgent:
             """
             print(f"[{task.op_name.upper()}] [TOOL] get_task_bundle", flush=True)
             op_path = Path(task.op_file)
+            if not op_path.is_file():
+                return f"Error: op file {str(op_path)!r} does not exist."
             bundle = {
                 "op_name": task.op_name,
                 "op_file": str(op_path),
@@ -103,11 +105,15 @@ class SynthesisAgent:
         def get_program_templates() -> str:
             """Return the MLIR output templates (agent/template.mlir)."""
             print(f"[{task.op_name.upper()}] [TOOL] get_program_templates", flush=True)
+            if not template_path.is_file():
+                return f"Error: template file {str(template_path)!r} does not exist."
             return template_path.read_text(encoding="utf-8")
 
         def get_available_primitives() -> str:
             """Return allowed primitive operators (agent/ops.md); use only these operators and do not introduce unsupported ones (for example, loops)."""
             print(f"[{task.op_name.upper()}] [TOOL] get_available_primitives", flush=True)
+            if not ops_path.is_file():
+                return f"Error: ops file {str(ops_path)!r} does not exist."
             return ops_path.read_text(encoding="utf-8")
 
         def list_library_functions() -> str:
@@ -128,7 +134,7 @@ class SynthesisAgent:
                 if func.function_name == name:
                     return func.source
 
-            raise ValueError("name must refer to a function in the library")
+            return f"Error: function {name!r} does not exist in the library. Call list_library_functions() to see available functions."
 
         def search_library_functions(query: str, top_k: int = 3) -> str:
             """Search inside library functions by substring 'query' to understand how specific operators are used. Returns JSON array of matches with function name and docstring."""
@@ -173,11 +179,11 @@ class SynthesisAgent:
             p = (examples_dir / name).resolve()
             ex_dir = examples_dir.resolve()
             if ex_dir not in p.parents:
-                raise ValueError(
-                    "example name must refer to a file under the examples directory"
-                )
+                return "Error: example name must refer to a file under the examples directory"
             if p.suffix != ".mlir":
-                raise ValueError("example must be a .mlir file")
+                return "Error: example must be a .mlir file"
+            if not p.is_file():
+                return f"Error: example {name!r} does not exist. Call list_examples() to see available files."
             return p.read_text(encoding="utf-8")
 
         def search_examples(query: str, top_k: int = 3) -> str:
@@ -192,6 +198,8 @@ class SynthesisAgent:
                 return "[]"
             matches: list[dict] = []
             for p in sorted(examples_dir.glob("*.mlir")) if examples_dir.exists() else []:
+                if not p.is_file():
+                    continue
                 text = p.read_text(encoding="utf-8", errors="replace")
                 idx = text.lower().find(q.lower())
                 if idx == -1:
