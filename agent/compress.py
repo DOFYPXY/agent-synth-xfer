@@ -83,6 +83,7 @@ def _run_agent_compress(
         pattern = r"Sound %:\s*(?P<sound>[\d.]+),\s*Exact %:\s*(?P<exact>[\d.]+)"
 
         # Xuanyu: target.eval_summary are guaranteed to exist, check text equivalence should be enough
+        assert target.eval_summary is not None
         match = re.search(pattern, target.eval_summary)
         if match is None:
             return (
