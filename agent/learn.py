@@ -262,6 +262,8 @@ def run_stitch_learn(
         )
         if lib_func is not None:
             new_lib_funcs.append(lib_func)
+        else:
+            print("Function naming agent exceeded the turn limit. Function not added.")
 
     merged = LibraryState(functions=previous_library.functions + new_lib_funcs)
     lib_dir = output_dir / f"library{version}"
@@ -301,6 +303,10 @@ def run_library_learn_task(
     if run_result is not None:
         summary = summarize_token_usage(run_result)
         print(summary)
+    else:
+        print(
+            "Library agent exceeded the turn limit. Previous library returned unchanged."
+        )
 
     existing_names = {f.function_name for f in previous_library.functions}
     new_functions = [
