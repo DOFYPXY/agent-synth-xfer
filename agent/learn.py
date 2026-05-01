@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import UsageLimitExceeded
@@ -440,3 +441,7 @@ def main():
     print("Library learning complete")
 
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
