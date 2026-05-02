@@ -4,14 +4,14 @@ import asyncio
 import json
 from pathlib import Path
 import time
-from typing import Any
 
-from agents import Agent, Runner, function_tool
+from pydantic_ai import Agent
+from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.usage import UsageLimits
 
 from agent.agent_solution_set import AgentSolutionSet
 from synth_xfer._util.domain import AbstractDomain
 
-from .agent_helper import format_agent_run_dump
 from .util import (
     EvalArgs,
     LibraryState,
@@ -84,7 +84,6 @@ class SynthesisAgent:
             args.meet_instructions if args.meet else args.agent_instructions
         )
 
-        @function_tool
         def get_task_bundle() -> str:
             """Return JSON with op_name, op_file, and op_content.
 
@@ -94,6 +93,8 @@ class SynthesisAgent:
             """
             print(f"[{task.op_name.upper()}] [TOOL] get_task_bundle", flush=True)
             op_path = Path(task.op_file)
+            if not op_path.is_file():
+                return f"Error: op file {str(op_path)!r} does not exist."
             bundle = {
                 "op_name": task.op_name,
                 "op_file": str(op_path),
@@ -101,19 +102,20 @@ class SynthesisAgent:
             }
             return json.dumps(bundle)
 
-        @function_tool
         def get_program_templates() -> str:
             """Return the MLIR output templates (agent/template.mlir)."""
             print(f"[{task.op_name.upper()}] [TOOL] get_program_templates", flush=True)
+            if not template_path.is_file():
+                return f"Error: template file {str(template_path)!r} does not exist."
             return template_path.read_text(encoding="utf-8")
 
-        @function_tool
         def get_available_primitives() -> str:
             """Return allowed primitive operators (agent/ops.md); use only these operators and do not introduce unsupported ones (for example, loops)."""
             print(f"[{task.op_name.upper()}] [TOOL] get_available_primitives", flush=True)
+            if not ops_path.is_file():
+                return f"Error: ops file {str(ops_path)!r} does not exist."
             return ops_path.read_text(encoding="utf-8")
 
-        @function_tool
         def list_library_functions() -> str:
             """List available library functions as JSON dictionary of func names and docstrings"""
             print(f"[{task.op_name.upper()}] [TOOL] list_library_functions", flush=True)
@@ -122,7 +124,6 @@ class SynthesisAgent:
             }
             return json.dumps(funcs)
 
-        @function_tool
         def get_library_function(name: str) -> str:
             """Return the source of a function by its name"""
             print(
@@ -133,9 +134,8 @@ class SynthesisAgent:
                 if func.function_name == name:
                     return func.source
 
-            raise ValueError("name must refer to a function in the library")
+            return f"Error: function {name!r} does not exist in the library. Call list_library_functions() to see available functions."
 
-        @function_tool
         def search_library_functions(query: str, top_k: int = 3) -> str:
             """Search inside library functions by substring 'query' to understand how specific operators are used. Returns JSON array of matches with function name and docstring."""
             # Xuanyu: I am not sure whether this tool is actually useful, since search_examples show usage of operators.
@@ -163,7 +163,6 @@ class SynthesisAgent:
                     break
             return json.dumps(matches)
 
-        @function_tool
         def list_examples() -> str:
             """List available example transformer files as JSON array of filenames."""
             print(f"[{task.op_name.upper()}] [TOOL] list_examples", flush=True)
@@ -174,21 +173,19 @@ class SynthesisAgent:
             )
             return json.dumps(names)
 
-        @function_tool
         def get_example(name: str) -> str:
             """Return the contents of one example transformer file by filename (e.g. 'kb_xor.mlir')."""
             print(f"[{task.op_name.upper()}] [TOOL] get_example: {name!r}", flush=True)
             p = (examples_dir / name).resolve()
             ex_dir = examples_dir.resolve()
             if ex_dir not in p.parents:
-                raise ValueError(
-                    "example name must refer to a file under the examples directory"
-                )
+                return "Error: example name must refer to a file under the examples directory"
             if p.suffix != ".mlir":
-                raise ValueError("example must be a .mlir file")
+                return "Error: example must be a .mlir file"
+            if not p.is_file():
+                return f"Error: example {name!r} does not exist. Call list_examples() to see available files."
             return p.read_text(encoding="utf-8")
 
-        @function_tool
         def search_examples(query: str, top_k: int = 3) -> str:
             """Search inside reference implementations by substring 'query' to understand the usage of operators. Returns JSON array of matches with filename and snippet."""
             print(
@@ -201,6 +198,8 @@ class SynthesisAgent:
                 return "[]"
             matches: list[dict] = []
             for p in sorted(examples_dir.glob("*.mlir")) if examples_dir.exists() else []:
+                if not p.is_file():
+                    continue
                 text = p.read_text(encoding="utf-8", errors="replace")
                 idx = text.lower().find(q.lower())
                 if idx == -1:
@@ -219,7 +218,6 @@ class SynthesisAgent:
                     break
             return json.dumps(matches)
 
-        @function_tool
         def run_eval_tool(transformer_mlir: str) -> str:
             """Evaluate the generated transformer MLIR for the current operation (e.g. kb_<op>). Pass the raw MLIR code as a string. Uses `--exact-bw` bitwidths from the CLI (default 8).
 
@@ -244,7 +242,6 @@ class SynthesisAgent:
                 self._soln_iters.append(transformer_mlir)
             return summary
 
-        @function_tool
         def get_existing_solutions() -> str:
             """Return the MLIR source of all solutions currently in the solution set. Each solution will be combined with your candidate via meet when eval_improve is called. Use this to understand what cases are already covered before writing a new candidate."""
             print(f"[{task.op_name.upper()}] [TOOL] get_existing_solutions", flush=True)
@@ -252,7 +249,6 @@ class SynthesisAgent:
                 return "No solutions in the solution set yet."
             return "\n\n".join(self.solution_set.solutions)
 
-        @function_tool
         def run_eval_improve(transformer_mlir: str) -> str:
             """Evaluate the transformer MLIR combined with all previously accepted solutions via meet. Returns two summary lines so you can compare before and after:
 
@@ -335,9 +331,19 @@ class SynthesisAgent:
                 "functions, then revise your solution to reuse them where "
                 "applicable."
             )
-        user_content += f"\nYou have a maximum of {self._args.max_turns} iterations to complete this task, If you are going to exceed the limit, return the current MLIR you have generated."
-        inp: list[Any] = [{"role": "user", "content": user_content}]
-        result = await Runner.run(self._agent, inp, max_turns=self._args.max_turns)
+        soft_limit = self._args.max_turns - 2
+        user_content += f"\nYou have at most {soft_limit} iterations to complete this task. If you are about to exceed this limit, stop and return the MLIR solution you have generated so far."
+        try:
+            result = await self._agent.run(
+                user_content,
+                usage_limits=UsageLimits(request_limit=self._args.max_turns),
+            )
+        except UsageLimitExceeded as e:
+            print(
+                f"[{self._task.op_name.upper()}] Request limit hit ({e}); "
+                f"returning {len(self._soln_iters)} solution(s) collected so far."
+            )
+            result = None
         return result, list(self._soln_iters)
 
 
@@ -365,15 +371,8 @@ async def run_single_synthesis_task(
         run_result, soln_iters = await synth_agent.run(round_num)
         synthesis_time = time.monotonic() - t0
 
-    if not args.mock_synth:
-        if args.dump_agent_run:
-            dump_path = save_file(
-                format_agent_run_dump(run_result, args.synth_model),
-                op_output_dir,
-                f"synth_agent_r{round_num}_{task.op_name}.log",
-            )
-            print(f"{tag} Agent run dump: {dump_path}")
-        print(f"{tag} {summarize_token_usage(run_result, args.synth_model)}")
+    if not args.mock_synth and run_result is not None:
+        print(f"{tag} {summarize_token_usage(run_result)}")
 
     if soln_iters == []:
         print(f"{tag} No valid transformer generated by the agent.")
@@ -387,13 +386,13 @@ async def run_single_synthesis_task(
     print(f"{tag} Evaluating transformer...")
     eval_t0 = time.monotonic()
     if args.meet:
-        eval_summary, _ = synth_agent.solution_set.eval_improve(
+        eval_summary, eval_result = synth_agent.solution_set.eval_improve(
             soln_iters[-1],
             synth_agent._eval_args,
             no_previous=True,
         )
     else:
-        eval_summary, _ = eval_transformer(
+        eval_summary, eval_result = eval_transformer(
             [soln_iters[-1]],
             synth_agent._eval_args,
             lib=[func.source for func in library.functions],
@@ -410,6 +409,7 @@ async def run_single_synthesis_task(
         task=task,
         solution_iters=soln_iters,
         eval_summary=eval_summary,
+        eval_result=eval_result,
     )
 
 

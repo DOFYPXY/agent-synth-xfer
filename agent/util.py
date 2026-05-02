@@ -15,16 +15,6 @@ from synth_xfer._util.lower import LowerToLLVM
 from synth_xfer._util.parse_mlir import get_helper_funcs, parse_mlir_mod, top_as_xfer
 from synth_xfer._util.random import Random, Sampler
 
-TOKEN_PRICING_PER_1M = {
-    "gpt-5.3-codex": (1.75, 0.175, 14.00),
-    "gpt-5.2-codex": (1.75, 0.175, 14.00),
-    "gpt-5.1-codex-max": (1.25, 0.125, 10.00),
-    "gpt-5.1-codex": (1.25, 0.125, 10.00),
-    "gpt-5-codex": (1.25, 0.125, 10.00),
-    "gpt-5.1-codex-mini": (0.25, 0.025, 2.00),
-    "codex-mini-latest": (1.50, 0.375, 6.00),
-}
-
 
 @dataclass
 class EvalArgs:
@@ -54,7 +44,7 @@ class SynthesisResult:
 
     task: SynthesisTask
     solution_iters: list[str]
-    eval_summary: str
+    eval_summary: str | None
     eval_result: EvalResult | None = None
 
     @property
@@ -100,19 +90,12 @@ class TokenUsageSummary:
     input_tokens: int
     cached_input_tokens: int
     output_tokens: int
-    estimated_cost_usd: float | None
 
     def __str__(self) -> str:
-        cost = (
-            f"${self.estimated_cost_usd:.6f}"
-            if self.estimated_cost_usd is not None
-            else "N/A"
-        )
         return (
             f"Token usage: input={self.input_tokens:,}, "
             f"cached_input={self.cached_input_tokens:,}, "
-            f"output={self.output_tokens:,}, "
-            f"estimated_cost={cost}"
+            f"output={self.output_tokens:,}"
         )
 
 
@@ -209,31 +192,14 @@ def make_output_dir(output_dir: Path):
     (output_dir / "log").mkdir(exist_ok=True)
 
 
-def summarize_token_usage(run_result, model: str | None = None) -> TokenUsageSummary:
-    """Aggregate input/cached-input/output tokens and estimate model cost."""
-    inp = cached_inp = out = 0
-    for resp in getattr(run_result, "raw_responses", []):
-        u = getattr(resp, "usage", None)
-        if u is None:
-            continue
-        inp += getattr(u, "input_tokens", 0) or 0
-        out += getattr(u, "output_tokens", 0) or 0
-        idetails = getattr(u, "input_tokens_details", None)
-        if idetails is not None:
-            cached_inp += getattr(idetails, "cached_tokens", 0) or 0
-
-    pricing = TOKEN_PRICING_PER_1M.get(model.lower()) if model else None
-    if pricing is None:
-        return TokenUsageSummary(inp, cached_inp, out, None)
-
-    input_rate, cached_input_rate, output_rate = pricing
-    non_cached_input = max(inp - cached_inp, 0)
-    estimated_cost_usd = (
-        (non_cached_input / 1_000_000.0) * input_rate
-        + (cached_inp / 1_000_000.0) * cached_input_rate
-        + (out / 1_000_000.0) * output_rate
+def summarize_token_usage(run_result) -> TokenUsageSummary:
+    """Aggregate input/cached-input/output tokens from the run result."""
+    u = run_result.usage()
+    return TokenUsageSummary(
+        input_tokens=u.input_tokens or 0,
+        cached_input_tokens=u.cache_read_tokens or 0,
+        output_tokens=u.output_tokens or 0,
     )
-    return TokenUsageSummary(inp, cached_inp, out, estimated_cost_usd)
 
 
 def save_file(content: str, dir: Path, file_name: str) -> Path:

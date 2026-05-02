@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 import re
 
-from agents import Agent, Runner, function_tool
+from pydantic_ai import Agent
+from pydantic_ai.usage import UsageLimits
 
-from .agent_helper import format_agent_run_dump
 from .util import (
     EvalArgs,
     LibraryState,
@@ -33,25 +33,21 @@ def _run_agent_compress(
     """Run agent to compress a target file. Returns (final_output, run_result)."""
     del api_key  # Reserved for future model/provider auth parity.
 
-    @function_tool
     def get_target_file() -> str:
         """Get the MLIR code of the file to compress"""
         if target.solution_text is None:
             raise ValueError("target solution text is unavailable")
         return target.solution_text
 
-    @function_tool
     def get_available_primitives() -> str:
         """Return the allowed primitive operators documentation (agent/ops.md)."""
         return ops_path.read_text(encoding="utf-8")
 
-    @function_tool
     def list_library_functions() -> str:
         """List available library functions as JSON dictionary of func names and docstrings"""
         funcs = {func.function_name: func.docstring for func in library.functions}
         return json.dumps(funcs)
 
-    @function_tool
     def get_library_function(name: str) -> str:
         """Return the source of a function by its name"""
         for func in library.functions:
@@ -60,7 +56,6 @@ def _run_agent_compress(
 
         raise ValueError("name must refer to a function in the library")
 
-    @function_tool
     def search_library_functions(query: str, top_k: int = 3) -> str:
         """Search library functions by substring. Returns JSON array of matches with function name and docstring."""
         if top_k <= 0:
@@ -83,12 +78,12 @@ def _run_agent_compress(
                 break
         return json.dumps(matches)
 
-    @function_tool
     def verify_correctness(transformer_mlir: str) -> str:
         """Confirm that the compressed transformer has the same eval results as uncompressed transformer"""
         pattern = r"Sound %:\s*(?P<sound>[\d.]+),\s*Exact %:\s*(?P<exact>[\d.]+)"
 
         # Xuanyu: target.eval_summary are guaranteed to exist, check text equivalence should be enough
+        assert target.eval_summary is not None
         match = re.search(pattern, target.eval_summary)
         if match is None:
             return (
@@ -124,9 +119,9 @@ def _run_agent_compress(
         model=model,
     )
 
-    result = Runner.run_sync(agent, prompt, max_turns=max_turns)
+    result = agent.run_sync(prompt, usage_limits=UsageLimits(request_limit=max_turns))
 
-    return (result.final_output, result)
+    return (result.output, result)
 
 
 def run_compress_task(
@@ -160,18 +155,10 @@ def run_compress_task(
         max_turns=args.max_turns,
         eval_args=eval_args,
     )
-    summary = summarize_token_usage(run_result, model=args.library_model)
+    summary = summarize_token_usage(run_result)
     print(summary)
 
     target_text = clean_llm_output(llm_output)
-
-    if args.dump_agent_run:
-        dump_path = save_file(
-            format_agent_run_dump(run_result, model=args.library_model),
-            op_output_dir,
-            f"compress_run{round_num}_{op_name}.log",
-        )
-        print(f"Agent run dump: {dump_path}")
 
     transformer_file = save_file(
         target_text,
@@ -183,6 +170,5 @@ def run_compress_task(
     return SynthesisResult(
         task=target.task,
         solution_iters=[*target.solution_iters, target_text],
-        transformer_path=target.transformer_path,
         eval_summary=target.eval_summary,
     )

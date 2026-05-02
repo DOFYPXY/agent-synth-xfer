@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import heapq
 import itertools
 from pathlib import Path
+from typing import cast
 
 from xdsl_smt.dialects.transfer import GetOp, MakeOp
 
@@ -140,7 +142,7 @@ def _expand_pattern_guided(
     return results
 
 
-def _dags_from_paths(paths: list[Path]) -> dict[str, DAG]:
+def _dags_from_paths(paths: Sequence[Path]) -> dict[str, DAG]:
     dags: dict[str, DAG] = {}
     for path in paths:
         for fn, dag in mlir_program_to_dags(path).items():
@@ -148,7 +150,7 @@ def _dags_from_paths(paths: list[Path]) -> dict[str, DAG]:
     return dags
 
 
-def _dags_from_strs(progs: list[str]) -> dict[str, DAG]:
+def _dags_from_strs(progs: Sequence[str]) -> dict[str, DAG]:
     dags: dict[str, DAG] = {}
     for i, prog in enumerate(progs):
         try:
@@ -245,7 +247,7 @@ def _upper_bound(
 
 
 def search_patterns(
-    progs: list[Path | str], max_instructions: int = 3, top_k: int | None = None
+    progs: Sequence[Path | str], max_instructions: int = 3, top_k: int | None = None
 ) -> SearchResult:
     """Branch-and-bound search for high-utility DAG patterns.
 
@@ -256,9 +258,9 @@ def search_patterns(
     """
 
     if isinstance(progs[0], Path):
-        program_dags = _dags_from_paths(progs)
+        program_dags = _dags_from_paths(cast(Sequence[Path], progs))
     else:
-        program_dags = _dags_from_strs(progs)
+        program_dags = _dags_from_strs(cast(Sequence[str], progs))
 
     op_sigs = _collect_opcode_signatures(program_dags)
     reachable_sizes = _precompute_reachable_sizes(program_dags)

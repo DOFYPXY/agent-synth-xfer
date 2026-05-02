@@ -26,7 +26,7 @@ dependencies = [
   "egglog>=1.0.0",
   "cloudpickle>=3.1.2",
   "PyYAML>=6.0.3",
-  "openai-agents",
+  "pydantic-ai-slim[openai]",
 ]
 
 [project.optional-dependencies]
@@ -64,9 +64,9 @@ CMAKE_C_COMPILER = "clang"
 CMAKE_CXX_COMPILER = "clang++"
 SYNTH_XFER_DOMAINS = [
   "knownbits",
-  # "uconst_range",
-  # "sconst_range",
-  # "mod3",
+  "uconst_range",
+  "sconst_range",
+  "mod3",
   # "mod5",
   # "mod7",
   # "mod11",
