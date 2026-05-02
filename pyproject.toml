@@ -65,7 +65,7 @@ CMAKE_CXX_COMPILER = "clang++"
 SYNTH_XFER_DOMAINS = [
   "knownbits",
   "uconst_range",
-  # "sconst_range",
+  "sconst_range",
   "mod3",
   # "mod5",
   # "mod7",
