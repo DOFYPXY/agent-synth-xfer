@@ -9,7 +9,10 @@ from synth_xfer._util.pattern import (
     analyze_pattern,
     construct_pattern_solution,
     eval_pattern,
+    load_pattern,
 )
+from synth_xfer._util.smt_solver import SolverKind
+from synth_xfer._util.tsv import EnumData
 from synth_xfer.cli.args import int_tuple
 
 
@@ -93,6 +96,13 @@ def _gen_args(p: ArgumentParser):
         help="Timeout in seconds for ideal computation",
     )
     p.add_argument(
+        "--solver",
+        type=SolverKind,
+        choices=list(SolverKind),
+        default=SolverKind.bitwuzla,
+        help="SMT solver backend for ideal computation",
+    )
+    p.add_argument(
         "--max-failures",
         type=int,
         default=1000,
@@ -101,12 +111,6 @@ def _gen_args(p: ArgumentParser):
 
 
 def _eval_args(p: ArgumentParser):
-    p.add_argument(
-        "--sequential-xfer",
-        type=Path,
-        required=True,
-        help="Sequential MLIR file (use `pattern make-sequential` to generate this)",
-    )
     p.add_argument(
         "--composite-xfer", type=Path, required=True, help="Composite MLIR file"
     )
@@ -194,6 +198,7 @@ def main() -> None:
             weight_beta=args.weight_beta,
             timeout=args.timeout,
             max_failures=args.max_failures,
+            solver_kind=args.solver,
         )
         generated_inputs.write_tsv(args.output)
         for bw, timeout in timeouts.items():
@@ -209,19 +214,24 @@ def main() -> None:
         else:
             print(fn)
     if args.command == "eval":
+        with args.input.open("r") as f:
+            data = EnumData.read_tsv(f)
+
+        pattern_path = Path(data.metadata.op)
+        dag = load_pattern(pattern_path)
         seq_exact, comp_exact, seq_norm, comp_norm = eval_pattern(
-            args.sequential_xfer,
+            dag.expression,
             args.composite_xfer,
             args.xfer_name,
-            args.input,
+            data,
             args.exact_bw,
             args.norm_bw,
         )
 
         print("Type       | Exact % | Norm Score")
         print("-----------|---------|-------------")
-        print(f"Sequential | {seq_exact}% | {seq_norm}")
-        print(f"Composite  | {comp_exact}% | {comp_norm}")
+        print(f"LLVM Seq   | {seq_exact:6.2f}% | {seq_norm:.5f}")
+        print(f"Composite  | {comp_exact:6.2f}% | {comp_norm:.5f}")
 
 
 if __name__ == "__main__":

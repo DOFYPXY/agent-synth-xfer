@@ -9,7 +9,8 @@ import pandas as pd
 
 from synth_xfer._util.domain import AbstractDomain
 from synth_xfer._util.max_precise import RowProcessor, RowTask
-from synth_xfer._util.pattern import PatternDag, _load_pattern
+from synth_xfer._util.pattern import PatternDag, get_fallback_op, load_pattern
+from synth_xfer._util.smt_solver import SolverKind
 from synth_xfer._util.tsv import EnumData, EnumMetaData
 
 _COMMUTATIVE_OPS = {
@@ -60,6 +61,7 @@ class PatternInputGenerator:
         self.weight_beta = weight_beta
         self.providers = self._build_arg_providers()
         self._op_tables_by_bw: dict[int, dict[str, pd.DataFrame]] = {}
+        self._warned_fallback_ops: set[tuple[str, str]] = set()
 
     def _is_fully_free_node(self, node_idx: int) -> bool:
         return all(
@@ -95,7 +97,23 @@ class PatternInputGenerator:
     def _load_op_table(self, op: str, bw: int) -> pd.DataFrame:
         path = self.data_dir / str(self.domain) / f"{op}.tsv"
         if not path.exists():
-            raise FileNotFoundError(f"Missing data file '{path}'.")
+            fallback_op = get_fallback_op(op)
+            if fallback_op is None:
+                raise FileNotFoundError(
+                    f"No {self.domain} input data for op '{op}'.\nExpected '{path}'."
+                )
+            fallback_path = self.data_dir / str(self.domain) / f"{fallback_op}.tsv"
+            if not fallback_path.exists():
+                raise FileNotFoundError(
+                    f"No {self.domain} input data for op '{op}', "
+                    f"and fallback op '{fallback_op}' also missing.\n"
+                    f"Expected '{path}' or '{fallback_path}'."
+                )
+            warning_key = (op, fallback_op)
+            if warning_key not in self._warned_fallback_ops:
+                print(f"WARNING: using {fallback_op} input data in place of {op}")
+                self._warned_fallback_ops.add(warning_key)
+            path = fallback_path
         with path.open() as f:
             data = EnumData.read_tsv(f)
         frame = cast(pd.DataFrame, data.enumdata[data.enumdata["bw"] == bw].copy())
@@ -177,6 +195,28 @@ class PatternInputGenerator:
         values = tuple(assigned[arg] for arg in self.dag.args)
         return (bw, *values, "(bottom)"), proposal_prob**self.weight_beta
 
+    def sample_row_with_ideal(
+        self, bw: int, op_tables: dict[str, pd.DataFrame]
+    ) -> tuple[tuple[object, ...], float]:
+        if not _is_single_op(self.dag):
+            raise ValueError(
+                "sample_row_with_ideal is only valid for single-operator patterns."
+            )
+        node = self.dag.nodes[0]
+        frame = op_tables[node.operation]
+        if "ideal" not in frame.columns:
+            raise ValueError(
+                f"Data for op '{node.operation}' is missing required column 'ideal'."
+            )
+        row, row_prob = self._sample_weighted_row(frame, node.operation)
+        assignments: dict[str, str] = {}
+        for operand_idx, operand in enumerate(node.operands):
+            if operand in self.dag.args and operand not in assignments:
+                assignments[operand] = str(row[f"arg_{operand_idx}"])
+        values = tuple(assignments[arg] for arg in self.dag.args)
+        ideal = str(row["ideal"])
+        return (bw, *values, ideal), row_prob**self.weight_beta
+
     def sample_rows(self, bw: int, samples: int) -> list[tuple[object, ...]]:
         op_tables = self._load_op_tables(bw)
         rows: list[tuple[object, ...]] = []
@@ -184,6 +224,12 @@ class PatternInputGenerator:
             row, weight = self.sample_row(bw, op_tables)
             rows.append((*row, weight))
         return rows
+
+
+def _is_single_op(dag: PatternDag) -> bool:
+    return len(dag.nodes) == 1 and all(
+        operand in dag.args for operand in dag.nodes[0].operands
+    )
 
 
 def _ideal_is_top(i: str, bw: int, domain: AbstractDomain) -> bool:
@@ -208,8 +254,9 @@ def generate_pattern_inputs(
     weight_beta: float,
     timeout: int,
     max_failures: int,
+    solver_kind: SolverKind,
 ) -> tuple[EnumData, dict[int, int]]:
-    dag = _load_pattern(path)
+    dag = load_pattern(path)
     generator = PatternInputGenerator(
         dag=dag,
         domain=domain,
@@ -225,73 +272,110 @@ def generate_pattern_inputs(
     hbw: list[tuple[int, int, int]] = []
     timeout_counts_by_bw: dict[int, int] = {}
     max_workers = os.cpu_count() or 1
+    single_op = _is_single_op(dag)
 
-    with Pool(processes=max_workers) as pool:
-        processor = RowProcessor(path, domain, timeout)
+    if single_op:
         for bw, samples in sorted(mbw_specs, key=lambda spec: spec[0]):
             rows_for_bw: list[tuple[object, ...]] = []
             seen_args: set[tuple[str, ...]] = set()
             failed_attempts_since_accept = 0
             timeout_counts_by_bw[bw] = 0
+            op_tables = generator._load_op_tables(bw)
             while len(rows_for_bw) < samples:
-                batch_rows: list[tuple[tuple[object, ...], tuple[str, ...], float]] = []
-                tasks: list[RowTask] = []
-                batch_size = min(max_workers, samples - len(rows_for_bw))
-                while len(tasks) < batch_size:
-                    row, weight = generator.sample_row(bw, generator._load_op_tables(bw))
-                    arg_values = tuple(str(value) for value in row[1:-1])
-                    if arg_values in seen_args:
-                        failed_attempts_since_accept += 1
-                        if failed_attempts_since_accept >= max_failures:
-                            raise ValueError(
-                                f"Failed to add a new row for bw={bw} after {max_failures} "
-                                "consecutive rejected attempts due to duplicates or timeouts."
-                            )
-                        continue
-                    batch_rows.append((row, arg_values, weight))
-                    tasks.append(
-                        RowTask(
-                            index=len(tasks),
-                            bw=bw,
-                            args=arg_values,
+                row, weight = generator.sample_row_with_ideal(bw, op_tables)
+                arg_values = tuple(str(value) for value in row[1:-1])
+                ideal = str(row[-1])
+
+                if arg_values in seen_args:
+                    failed_attempts_since_accept += 1
+                    if failed_attempts_since_accept >= max_failures:
+                        raise ValueError(
+                            f"Failed to add a new row for bw={bw} after {max_failures} "
+                            "consecutive rejected attempts due to duplicates or timeouts."
                         )
-                    )
+                    continue
 
-                for result in pool.map(processor, tasks):
-                    row, arg_values, weight = batch_rows[result.index]
-                    if result.timed_out:
-                        timeout_counts_by_bw[bw] += 1
-                        failed_attempts_since_accept += 1
-                        if failed_attempts_since_accept >= max_failures:
-                            raise ValueError(
-                                f"Failed to add a new row for bw={bw} after {max_failures} "
-                                "consecutive rejected attempts due to duplicates or timeouts."
-                            )
-                        continue
-
-                    if arg_values in seen_args:
-                        failed_attempts_since_accept += 1
-                        if failed_attempts_since_accept >= max_failures:
-                            raise ValueError(
-                                f"Failed to add a new row for bw={bw} after {max_failures} "
-                                "consecutive rejected attempts due to duplicates or timeouts."
-                            )
-                        continue
-
-                    assert result.ideal is not None
-
-                    if _ideal_is_top(result.ideal, bw, domain):
-                        seen_args.add(arg_values)
-                        continue
-
-                    rows_for_bw.append((row[0], *arg_values, result.ideal, weight))
+                if _ideal_is_top(ideal, bw, domain):
                     seen_args.add(arg_values)
-                    failed_attempts_since_accept = 0
-                    if len(rows_for_bw) >= samples:
-                        break
+                    continue
+
+                rows_for_bw.append((row[0], *arg_values, ideal, weight))
+                seen_args.add(arg_values)
+                failed_attempts_since_accept = 0
 
             mbw_rows.extend(rows_for_bw)
             mbw.append((bw, len(rows_for_bw)))
+    else:
+        with Pool(processes=max_workers) as pool:
+            processor = RowProcessor(path, domain, timeout, solver_kind)
+            for bw, samples in sorted(mbw_specs, key=lambda spec: spec[0]):
+                rows_for_bw: list[tuple[object, ...]] = []
+                seen_args: set[tuple[str, ...]] = set()
+                failed_attempts_since_accept = 0
+                timeout_counts_by_bw[bw] = 0
+                while len(rows_for_bw) < samples:
+                    batch_rows: list[
+                        tuple[tuple[object, ...], tuple[str, ...], float]
+                    ] = []
+                    tasks: list[RowTask] = []
+                    batch_size = min(max_workers, samples - len(rows_for_bw))
+                    while len(tasks) < batch_size:
+                        row, weight = generator.sample_row(
+                            bw, generator._load_op_tables(bw)
+                        )
+                        arg_values = tuple(str(value) for value in row[1:-1])
+                        if arg_values in seen_args:
+                            failed_attempts_since_accept += 1
+                            if failed_attempts_since_accept >= max_failures:
+                                raise ValueError(
+                                    f"Failed to add a new row for bw={bw} after {max_failures} "
+                                    "consecutive rejected attempts due to duplicates or timeouts."
+                                )
+                            continue
+                        batch_rows.append((row, arg_values, weight))
+                        tasks.append(
+                            RowTask(
+                                index=len(tasks),
+                                bw=bw,
+                                args=arg_values,
+                            )
+                        )
+
+                    for result in pool.map(processor, tasks):
+                        row, arg_values, weight = batch_rows[result.index]
+                        if result.timed_out:
+                            timeout_counts_by_bw[bw] += 1
+                            failed_attempts_since_accept += 1
+                            if failed_attempts_since_accept >= max_failures:
+                                raise ValueError(
+                                    f"Failed to add a new row for bw={bw} after {max_failures} "
+                                    "consecutive rejected attempts due to duplicates or timeouts."
+                                )
+                            continue
+
+                        if arg_values in seen_args:
+                            failed_attempts_since_accept += 1
+                            if failed_attempts_since_accept >= max_failures:
+                                raise ValueError(
+                                    f"Failed to add a new row for bw={bw} after {max_failures} "
+                                    "consecutive rejected attempts due to duplicates or timeouts."
+                                )
+                            continue
+
+                        assert result.ideal is not None
+
+                        if _ideal_is_top(result.ideal, bw, domain):
+                            seen_args.add(arg_values)
+                            continue
+
+                        rows_for_bw.append((row[0], *arg_values, result.ideal, weight))
+                        seen_args.add(arg_values)
+                        failed_attempts_since_accept = 0
+                        if len(rows_for_bw) >= samples:
+                            break
+
+                mbw_rows.extend(rows_for_bw)
+                mbw.append((bw, len(rows_for_bw)))
 
     for bw, samples in sorted(hbw_specs, key=lambda spec: spec[0]):
         seen_args: set[tuple[str, ...]] = set()
