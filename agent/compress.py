@@ -170,5 +170,6 @@ def run_compress_task(
     return SynthesisResult(
         task=target.task,
         solution_iters=[*target.solution_iters, target_text],
+        is_sound=target.is_sound,
         eval_summary=target.eval_summary,
     )

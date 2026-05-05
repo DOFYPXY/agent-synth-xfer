@@ -3,7 +3,6 @@
 
 import asyncio
 from pathlib import Path
-import re
 import sys
 
 from synth_xfer._util.domain import AbstractDomain
@@ -24,14 +23,6 @@ from .util import (
     get_op_output_dir,
     load_initial_library,
 )
-
-
-def _is_fully_sound(eval_summary: str | None) -> bool:
-    """Return True if eval_summary reports Sound % = 100."""
-    if not eval_summary:
-        return False
-    m = re.search(r"Sound %:\s*([\d.]+)", eval_summary)
-    return m is not None and float(m.group(1)) == 100.0
 
 
 def run_library_learning_loop(
@@ -78,14 +69,12 @@ def run_library_learning_loop(
         )
 
         for r in latest_results:
-            if r.eval_result is not None and r.eval_result.is_perfect():
+            if r.is_sound and r.eval_result is not None and r.eval_result.is_perfect():
                 perfect_ops.add(r.task.op_name)
 
         if args.meet:
             for result in latest_results:
-                if result.solution_text is not None and _is_fully_sound(
-                    result.eval_summary
-                ):
+                if result.solution_text is not None and result.is_sound:
                     synth_agents[result.task.op_name].solution_set.upd_solution(
                         result.solution_text
                     )

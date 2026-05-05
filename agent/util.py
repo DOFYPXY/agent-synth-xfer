@@ -6,14 +6,22 @@ from pathlib import Path
 import re
 
 from pydantic import BaseModel
+from xdsl.dialects.func import FuncOp
 
 from synth_xfer._util.domain import AbstractDomain
 from synth_xfer._util.eval import enum, eval_transfer_func
 from synth_xfer._util.eval_result import EvalResult
 from synth_xfer._util.jit import Jit
 from synth_xfer._util.lower import LowerToLLVM
-from synth_xfer._util.parse_mlir import get_helper_funcs, parse_mlir_mod, top_as_xfer
+from synth_xfer._util.parse_mlir import (
+    get_helper_funcs,
+    parse_mlir_func,
+    parse_mlir_mod,
+    top_as_xfer,
+)
 from synth_xfer._util.random import Random, Sampler
+from synth_xfer._util.smt_solver import Model, SolverKind
+from synth_xfer.cli.verify import format_counterexample, verify_function
 
 
 @dataclass
@@ -44,6 +52,7 @@ class SynthesisResult:
 
     task: SynthesisTask
     solution_iters: list[str]
+    is_sound: bool
     eval_summary: str | None
     eval_result: EvalResult | None = None
 
@@ -388,6 +397,71 @@ def format_result(result: EvalResult) -> str:
         f"Exact %: {result.get_exact_prop() * 100:.2f}, "
         f"Dist: {result.sound_dist:.4f}"
     )
+
+
+VERIFY_BITWIDTHS: tuple[int, ...] = (4, 8, 16, 32, 64)
+
+
+def verify_transformer(
+    xfer: str,
+    eval_args: EvalArgs,
+    *,
+    lib: list[str] = [],
+    timeout: int = 60,
+    solver_kind: SolverKind = SolverKind.bitwuzla,
+) -> tuple[str, dict[int, Model | None] | None]:
+    """SMT-verify a transformer (MLIR string) at bitwidths 4, 8, 16, 32, 64.
+
+    Returns (summary, problems):
+      summary: an LLM-friendly string. If all bitwidths are sound, a single line.
+        Otherwise a verdict line plus one line per problematic bitwidth.
+      problems: dict from problematic bitwidth to (model | None).
+        - bw -> Model: unsound at bw, model carries the counterexample
+        - bw -> None:  solver timed out at bw
+        - empty dict:  sound at every checked bitwidth
+        - None:        parse / setup failure (summary is `error: ...`)
+    """
+    try:
+        func = parse_mlir_func(xfer)
+        xfer_helpers: list[FuncOp | None] = [parse_mlir_func(s) for s in lib]
+        helpers = get_helper_funcs(eval_args.op_path, eval_args.domain)
+        problems: dict[int, Model | None] = {}
+        for bw in VERIFY_BITWIDTHS:
+            is_sound, model = verify_function(
+                bw, func, list(xfer_helpers), helpers, timeout, solver_kind
+            )
+            if is_sound is None:
+                problems[bw] = None
+            elif not is_sound:
+                problems[bw] = model
+    except Exception as e:
+        msg = " ".join(str(e).splitlines())[:1500]
+        return (f"error: {msg}", None)
+
+    if not problems:
+        return ("VERIFIED sound at all checked bitwidths", problems)
+
+    xfer_name = func.sym_name.data
+    op_name = eval_args.op_path.stem
+    mlir_mod = None
+    if any(m is not None for m in problems.values()):
+        combined = ""
+        for s in lib + [xfer]:
+            combined = merge_library_text(combined, s)
+        mlir_mod = parse_mlir_mod(combined)
+
+    lines = ["UNSOUND or TIMEOUT at one or more bitwidths"]
+    for bw, model in problems.items():
+        if model is None:
+            lines.append(f"bw={bw}: TIMEOUT")
+        else:
+            assert mlir_mod is not None
+            cx = format_counterexample(
+                op_name, model, bw, eval_args.domain, mlir_mod, xfer_name, helpers, False
+            )
+            lines.append(f"bw={bw}: UNSOUND")
+            lines.append(cx)
+    return ("\n".join(lines), problems)
 
 
 def eval_transformer(

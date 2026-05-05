@@ -411,6 +411,7 @@ def main():
         result = SynthesisResult(
             task=task,
             solution_iters=[Path(input_file).read_text()],
+            is_sound=False,
             eval_summary=None,
         )
         corpus.append(result)

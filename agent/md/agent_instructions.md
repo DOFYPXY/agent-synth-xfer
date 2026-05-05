@@ -11,9 +11,10 @@ Use tools to fetch all materials; do not assume they are in this message:
 - get_available_primitives(): allowed operators
 - list_library_functions()/get_library_function(): retrieve available library functions
 - list_examples()/search_examples()/get_example(): reference implementations
-The most important tool is run_eval_tool(mlir): evaluate your candidate.
-If your result is unsound or imprecise, it will provide examples of unsound or imprecise cases.
-Make liberal use of this tool — eval early and eval often. Do not wait until you think your solution is complete; use it to check intermediate candidates as well.
+- run_eval_tool(mlir): evaluate your candidate. If your result is unsound or imprecise, it will provide examples of unsound or imprecise cases.
+- run_verify_tool(mlir): SMT-verify the soundness of your candidate. Use this after run_eval_tool reports the candidate as 100% sound, to confirm soundness symbolically (eval is sampling-based and can miss rare unsound inputs).
+
+Make liberal use of run_eval_tool — eval early and eval often. Do not wait until you think your solution is complete; use it to check intermediate candidates as well.
 
 ## Workflow
 
@@ -24,8 +25,12 @@ Workflow:
 4. Write your candidate. Prefer general transfer functions that cover broad families of inputs; avoid candidates that only solve one narrow case. Then immediately call run_eval_tool to test it. Use the feedback to iterate.
 	- If you get syntax error, fix syntax; **never return a syntax-invalid program.**
 	- If Sound % < 100: fix soundness first, then evaluate again before returning.
-	- If Sound % = 100 and (Exact % < 100 and Dist > 0): keep improving precision. Diagnose the gap (for example, missing cases or weak bit propagation) and try a stronger design.
-	- If Sound % = 100 and (Exact % = 100 or Dist = 0): you have reached a perfect result; you may return immediately.
+	- If Sound % = 100: call run_verify_tool to confirm soundness symbolically.
+		- If the verifier reports UNSOUND at any bitwidth: treat the candidate as unsound and fix soundness first, using the reported counterexample as a guide.
+		- If the verifier reports TIMEOUT at any bitwidth: simplify the transformer's logic so the solver can decide it within the time budget.
+		- If the candidate passes the verifier at every bitwidth:
+			- If Exact % < 100 and Dist > 0: keep improving precision. Diagnose the gap (for example, missing cases or weak bit propagation) and try a stronger design.
+			- If Exact % = 100 or Dist = 0: you have reached a perfect result; you may return immediately.
 	- If further changes would make the solution overcomplicated (for example, likely overfitting to a specific bitwidth), you may stop and return.
 
 ## Output Contract
