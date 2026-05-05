@@ -40,7 +40,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         ("--library-instructions", args.library_instructions),
         ("--autodoc-instructions", args.autodoc_instructions),
         ("--library-prompt", args.library_prompt),
-        ("--ops", args.ops),
+        ("--spec", args.spec),
         ("--template", args.template),
     ]:
         if not path.exists():
@@ -207,10 +207,10 @@ def parse_args() -> argparse.Namespace:
         help="Path to examples directory (default: agent/examples)",
     )
     parser.add_argument(
-        "--ops",
+        "--spec",
         type=Path,
-        default=Path(__file__).parent / "md" / "ops.md",
-        help="Path to ops.md file (default: agent/ops.md)",
+        default=Path(__file__).parent / "md" / "spec.md",
+        help="Path to spec.md file (default: agent/md/spec.md)",
     )
     parser.add_argument(
         "--template",

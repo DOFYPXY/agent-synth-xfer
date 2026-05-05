@@ -25,7 +25,7 @@ def _run_agent_compress(
     target: SynthesisResult,
     library: LibraryState,
     model: str,
-    ops_path: Path,
+    spec_path: Path,
     instructions_path: Path,
     max_turns: int,
     eval_args: EvalArgs,
@@ -39,9 +39,9 @@ def _run_agent_compress(
             raise ValueError("target solution text is unavailable")
         return target.solution_text
 
-    def get_available_primitives() -> str:
-        """Return the allowed primitive operators documentation (agent/ops.md)."""
-        return ops_path.read_text(encoding="utf-8")
+    def get_dialect_spec() -> str:
+        """Return the transfer dialect specification (types, allowed operators, and semantics)."""
+        return spec_path.read_text(encoding="utf-8")
 
     def list_library_functions() -> str:
         """List available library functions as JSON dictionary of func names and docstrings"""
@@ -110,7 +110,7 @@ def _run_agent_compress(
         instructions=instructions_path.read_text(encoding="utf-8").strip(),
         tools=[
             get_target_file,
-            get_available_primitives,
+            get_dialect_spec,
             list_library_functions,
             get_library_function,
             search_library_functions,
@@ -150,7 +150,7 @@ def run_compress_task(
         target=target,
         library=library,
         model=args.library_model,
-        ops_path=args.ops,
+        spec_path=args.spec,
         instructions_path=args.compress_instructions,
         max_turns=args.max_turns,
         eval_args=eval_args,

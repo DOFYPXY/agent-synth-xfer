@@ -8,7 +8,7 @@ Use tools to fetch all materials; do not assume they are in this message:
 	- op_constraint (optional): a predicate over concrete inputs; concretizations that violate it are out of scope
 	- note: use `op_constraint` to sharpen the transformer and improve precision beyond the unconstrained case. For example, if no concretization can satisfy `op_constraint`, return bottom (represented by `KnownZero = 1111` and `KnownOne = 1111`).
 - get_program_templates(): output templates
-- get_available_primitives(): allowed operators
+- get_dialect_spec(): transfer dialect spec (types, allowed operators, semantics)
 - list_library_functions()/get_library_function(): retrieve available library functions
 - list_examples()/search_examples()/get_example(): reference implementations
 - run_eval_tool(mlir): evaluate your candidate. If your result is unsound or imprecise, it will provide examples of unsound or imprecise cases.
@@ -36,6 +36,6 @@ Workflow:
 ## Output Contract
 
 - Return ONLY MLIR func.func @kb_<op>. Do not wrap it in a module.
-- Do not use any operators (for example, loops) that are not listed by `get_available_primitives()`.
+- Do not use any operators (for example, loops) that are not listed by `get_dialect_spec()`.
 - One operation per line; SSA form; no explanations.
 - CRITICAL: Each MLIR line must be exactly one allowed operation. Never emit alias/copy assignments (forbidden: `%x = %y : !transfer.integer`).

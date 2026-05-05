@@ -33,7 +33,7 @@ def _run_agent_learn(
     previous_library: LibraryState,
     synthesis_results: list[SynthesisResult],
     model: str,
-    ops_path: Path,
+    spec_path: Path,
     instructions_path: Path,
     max_turns: int,
 ) -> tuple[LibraryState, object]:
@@ -51,9 +51,9 @@ def _run_agent_learn(
         )
         return "\n".join([str(s) for s in corpus])
 
-    def get_available_primitives() -> str:
-        """Return the allowed primitive operators documentation (agent/ops.md)."""
-        return ops_path.read_text(encoding="utf-8")
+    def get_dialect_spec() -> str:
+        """Return the transfer dialect specification (types, allowed operators, and semantics)."""
+        return spec_path.read_text(encoding="utf-8")
 
     def list_library_functions() -> str:
         """List available library functions as JSON dictionary of func names and docstrings"""
@@ -97,7 +97,7 @@ def _run_agent_learn(
         instructions=instructions_path.read_text(encoding="utf-8").strip(),
         tools=[
             get_corpus_functions,
-            get_available_primitives,
+            get_dialect_spec,
             list_library_functions,
             get_library_function,
             search_library_functions,
@@ -126,7 +126,7 @@ def _run_agent_learn(
 def _name_one_function(
     api_key: str,
     model: str,
-    ops_path: Path,
+    spec_path: Path,
     instructions_path: Path,
     max_turns: int,
     library: LibraryState,
@@ -139,7 +139,7 @@ def _name_one_function(
     prompt = (
         "Name and document the MLIR function. Call get_function_code() to fetch it, "
         "look up any func.call callees with get_library_function(), and consult "
-        "get_primitives() if needed. Return a snake_case function_name and a "
+        "get_dialect_spec() if needed. Return a snake_case function_name and a "
         "one-to-two sentence docstring describing what the function computes "
         "semantically."
         f"\nYou have at most {soft_limit} iterations to complete this task. If you "
@@ -159,9 +159,9 @@ def _name_one_function(
 
         raise ValueError("name must refer to a function in the library")
 
-    def get_primitives() -> str:
-        """Return the primitive operators documentation (agent/ops.md)."""
-        return ops_path.read_text(encoding="utf-8")
+    def get_dialect_spec() -> str:
+        """Return the transfer dialect specification (types, allowed operators, and semantics)."""
+        return spec_path.read_text(encoding="utf-8")
 
     agent = Agent(
         name="AutoDocumenter",
@@ -169,7 +169,7 @@ def _name_one_function(
         tools=[
             get_function_code,
             get_library_function,
-            get_primitives,
+            get_dialect_spec,
         ],
         model=model,
         output_type=FunctionDocumentation,
@@ -255,7 +255,7 @@ def run_stitch_learn(
         lib_func, _ = _name_one_function(
             api_key=api_key,
             model=args.library_model,
-            ops_path=args.ops,
+            spec_path=args.spec,
             instructions_path=args.autodoc_instructions,
             max_turns=args.max_turns,
             library=previous_library,
@@ -294,7 +294,7 @@ def run_library_learn_task(
         previous_library=previous_library,
         synthesis_results=synthesis_results,
         model=args.library_model,
-        ops_path=args.ops,
+        spec_path=args.spec,
         instructions_path=args.library_instructions,
         max_turns=args.max_turns,
     )
@@ -355,10 +355,10 @@ def main():
         help="Path to library learning prompt template (default: agent/md/library_prompt.md)",
     )
     parser.add_argument(
-        "--ops",
+        "--spec",
         type=Path,
-        default=Path(__file__).parent / "md" / "ops.md",
-        help="Path to ops.md file (default: agent/ops.md)",
+        default=Path(__file__).parent / "md" / "spec.md",
+        help="Path to spec.md file (default: agent/md/spec.md)",
     )
     parser.add_argument(
         "--library-dir",
@@ -393,7 +393,7 @@ def main():
         ("--library-instructions", args.library_instructions),
         ("--autodoc-instructions", args.autodoc_instructions),
         ("--library-prompt", args.library_prompt),
-        ("--ops", args.ops),
+        ("--spec", args.spec),
     ]:
         if not path.exists():
             parser.error(f"{name}: path does not exist: {path}")

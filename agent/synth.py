@@ -79,7 +79,7 @@ class SynthesisAgent:
         del api_key  # Reserved for future model/provider auth parity.
         task = self._task
         template_path: Path = args.template
-        ops_path: Path = args.ops
+        spec_path: Path = args.spec
         examples_dir: Path = args.examples_dir
         instructions_path: Path = (
             args.meet_instructions if args.meet else args.agent_instructions
@@ -110,12 +110,12 @@ class SynthesisAgent:
                 return f"Error: template file {str(template_path)!r} does not exist."
             return template_path.read_text(encoding="utf-8")
 
-        def get_available_primitives() -> str:
-            """Return allowed primitive operators (agent/ops.md); use only these operators and do not introduce unsupported ones (for example, loops)."""
-            print(f"[{task.op_name.upper()}] [TOOL] get_available_primitives", flush=True)
-            if not ops_path.is_file():
-                return f"Error: ops file {str(ops_path)!r} does not exist."
-            return ops_path.read_text(encoding="utf-8")
+        def get_dialect_spec() -> str:
+            """Return the transfer dialect specification (types, allowed operators, and semantics). Use only operators listed here; do not introduce unsupported constructs (for example, loops)."""
+            print(f"[{task.op_name.upper()}] [TOOL] get_dialect_spec", flush=True)
+            if not spec_path.is_file():
+                return f"Error: spec file {str(spec_path)!r} does not exist."
+            return spec_path.read_text(encoding="utf-8")
 
         def list_library_functions() -> str:
             """List available library functions as JSON dictionary of func names and docstrings"""
@@ -329,7 +329,7 @@ class SynthesisAgent:
             tools=[
                 get_task_bundle,
                 get_program_templates,
-                get_available_primitives,
+                get_dialect_spec,
                 list_examples,
                 get_example,
                 search_examples,
