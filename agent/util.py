@@ -116,16 +116,18 @@ class CollectiveLibrary:
     def update(self, results: list[SynthesisResult]) -> None:
         """add new results and update ones with greater exactness"""
         for result in results:
-            if result.is_sound and result.eval_result:
+            if result.is_sound and result.eval_result is not None:
                 op_name = result.task.op_name
+                new_exact = result.eval_result.get_exact_prop()
                 if op_name not in self.results:
                     self.results[op_name] = result
-                elif (
-                    self.results[op_name].eval_result is not None
-                    and result.eval_result.get_exact_prop()
-                    > self.results[op_name].eval_result.get_exact_prop()
-                ):
-                    self.results[op_name] = result
+                else:
+                    existing_eval = self.results[op_name].eval_result
+                    if (
+                        existing_eval is not None
+                        and new_exact > existing_eval.get_exact_prop()
+                    ):
+                        self.results[op_name] = result
 
 
 @dataclass
