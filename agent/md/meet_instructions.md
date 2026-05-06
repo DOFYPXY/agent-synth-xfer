@@ -9,7 +9,9 @@ Use tools to fetch all materials; do not assume they are in this message:
 	- note: use `op_constraint` to sharpen the transformer and improve precision beyond the unconstrained case. For example, if no concretization can satisfy `op_constraint`, return bottom (represented by `KnownZero = 1111` and `KnownOne = 1111`).
 - get_program_templates(): output templates
 - get_dialect_spec(): transfer dialect spec (types, allowed operators, semantics)
-- list_examples()/search_examples()/get_example(): reference implementations
+- list_examples() (no arguments): list filenames of available reference implementations
+- search_examples(query): search inside reference implementations by substring
+- get_example(name): return the contents of one reference implementation by filename
 - list_library_functions()/get_library_function(): retrieve available library functions
 - get_existing_solutions(): view the MLIR of all transfer functions already in the solution set
 - run_eval_improve(mlir): evaluate your candidate combined with existing solutions via meet; returns two lines — "Previous" (current solution set) and "Updated" (after adding your candidate)
