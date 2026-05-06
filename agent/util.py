@@ -121,7 +121,8 @@ class CollectiveLibrary:
                 if op_name not in self.results:
                     self.results[op_name] = result
                 elif (
-                    result.eval_result.get_exact_prop()
+                    self.results[op_name].eval_result is not None
+                    and result.eval_result.get_exact_prop()
                     > self.results[op_name].eval_result.get_exact_prop()
                 ):
                     self.results[op_name] = result
