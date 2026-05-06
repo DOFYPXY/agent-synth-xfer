@@ -330,6 +330,25 @@ def rename_xfer(solution: str, new_name: str) -> str:
     return re.sub(rf"@{re.escape(old_name)}\b", f"@{new_name}", solution)
 
 
+def _check_undefined_calls(xfer: list[str], combined: str, helpers) -> None:
+    """Raise ValueError if xfer calls any function not defined in combined or helpers."""
+    called: set[str] = set()
+    for src in xfer:
+        called.update(re.findall(r"func\.call\s+@(\w+)", src))
+    if not called:
+        return
+    defined: set[str] = set(re.findall(r"func\.func\s+@(\w+)", combined))
+    defined.add(helpers.meet_func.sym_name.data)
+    defined.add(helpers.get_top_func.sym_name.data)
+    undefined = called - defined
+    if undefined:
+        names = ", ".join(f"@{n}" for n in sorted(undefined))
+        raise ValueError(
+            f"Transformer calls undefined function(s): {names}. "
+            "Call list_library_functions() to see what is available."
+        )
+
+
 def _run_eval(
     xfer: list[str],
     base: list[str],
@@ -354,6 +373,9 @@ def _run_eval(
     for p in lib + base + xfer:
         if p.strip():
             combined = merge_library_text(combined, p)
+
+    if xfer:
+        _check_undefined_calls(xfer, combined, helpers)
 
     lowerer = LowerToLLVM(all_bws)
     lowerer.add_fn(helpers.meet_func)
