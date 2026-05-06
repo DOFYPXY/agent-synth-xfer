@@ -66,7 +66,7 @@ def run_library_learning_loop(
         for op_name in perfect_ops:
             print(f"[{op_name.upper()}] Skipping round {round_idx}: already perfect")
         latest_results = asyncio.run(
-            run_synthesis_tasks(synth_agents, tasks_to_run, round_idx, library, args)
+            run_synthesis_tasks(synth_agents, tasks_to_run, round_idx, args)
         )
 
         for r in latest_results:
