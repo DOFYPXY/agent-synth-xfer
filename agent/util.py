@@ -487,3 +487,19 @@ def eval_transformer(
         # Single line, truncated, so the agent reliably sees parse/location info
         msg_flat = " ".join(msg.splitlines())[:1500]
         return (f"error: {msg_flat}", None)
+
+
+def results_to_library(results: list[SynthesisResult]) -> list[LibraryFunction]:
+    lib: list[LibraryFunction] = []
+
+    for result in results:
+        if result.is_sound:
+            lib.append(
+                LibraryFunction(
+                    function_name=result.task.op_name,
+                    docstring=result.task.op_file,
+                    source=result.solution_iters[-1],
+                )
+            )
+
+    return lib

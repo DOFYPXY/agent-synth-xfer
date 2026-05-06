@@ -22,6 +22,7 @@ from .util import (
     get_api_key,
     get_op_output_dir,
     load_initial_library,
+    results_to_library,
 )
 
 
@@ -105,8 +106,17 @@ def run_library_learning_loop(
                     args=args,
                     api_key=api_key,
                 )
+
+            result_lib = results_to_library(latest_results)
             for agent in synth_agents.values():
-                agent.update_library(library)
+                custom_result_lib = [
+                    func
+                    for func in result_lib
+                    if agent._task.op_name != func.function_name
+                ]
+                agent.update_library(
+                    LibraryState(functions=library.functions + custom_result_lib)
+                )
             if args.compress:
                 new_results: list[SynthesisResult] = []
                 for result in latest_results:
