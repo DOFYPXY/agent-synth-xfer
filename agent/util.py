@@ -95,6 +95,39 @@ class LibraryState(BaseModel):
 
 
 @dataclass
+class CollectiveLibrary:
+    """Previously generated transformers collected into a library"""
+
+    results: dict[str, SynthesisResult]
+
+    def to_library_state(self, mask: list[str] = []) -> LibraryState:
+        funcs: list[LibraryFunction] = []
+        for op_name, result in self.results.items():
+            if op_name not in mask and result.solution_text:
+                funcs.append(
+                    LibraryFunction(
+                        function_name=op_name,
+                        docstring=result.task.op_file,
+                        source=result.solution_text,
+                    )
+                )
+        return LibraryState(functions=funcs)
+
+    def update(self, results: list[SynthesisResult]) -> None:
+        """add new results and update ones with greater exactness"""
+        for result in results:
+            if result.is_sound and result.eval_result:
+                op_name = result.task.op_name
+                if op_name not in self.results:
+                    self.results[op_name] = result
+                elif (
+                    result.eval_result.get_exact_prop()
+                    > self.results[op_name].eval_result.get_exact_prop()
+                ):
+                    self.results[op_name] = result
+
+
+@dataclass
 class TokenUsageSummary:
     input_tokens: int
     cached_input_tokens: int
@@ -509,19 +542,3 @@ def eval_transformer(
         # Single line, truncated, so the agent reliably sees parse/location info
         msg_flat = " ".join(msg.splitlines())[:1500]
         return (f"error: {msg_flat}", None)
-
-
-def results_to_library(results: list[SynthesisResult]) -> list[LibraryFunction]:
-    lib: list[LibraryFunction] = []
-
-    for result in results:
-        if result.is_sound:
-            lib.append(
-                LibraryFunction(
-                    function_name=result.task.op_name,
-                    docstring=result.task.op_file,
-                    source=result.solution_iters[-1],
-                )
-            )
-
-    return lib
