@@ -56,6 +56,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     has_benchmark = args.benchmark is not None
     has_op_file = bool(args.op_file)
 
+    if bool(args.collective_learn):
+        if bool(args.stitch):
+            parser.error("--stitch and --collective-learn are mutually exclusive")
+        if bool(args.no_learn):
+            parser.error("--no-learn and --collective-learn are mutually exclusive")
+
     if has_input:
         if has_benchmark:
             parser.error("--input and --benchmark are mutually exclusive")
@@ -270,6 +276,11 @@ def parse_args() -> argparse.Namespace:
         "--meet",
         action="store_true",
         help="Accumulate solutions into a SolutionSet and combine via meet",
+    )
+    parser.add_argument(
+        "--collective-learn",
+        action="store_true",
+        help="Instead of library learning, just pass in previous round of transformers",
     )
     parser.add_argument(
         "--mock-synth",

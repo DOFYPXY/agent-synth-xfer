@@ -10,7 +10,9 @@ Use tools to fetch all materials; do not assume they are in this message:
 - get_program_templates(): output templates
 - get_dialect_spec(): transfer dialect spec (types, allowed operators, semantics)
 - list_library_functions()/get_library_function(): retrieve available library functions
-- list_examples()/search_examples()/get_example(): reference implementations
+- list_examples() (no arguments): list filenames of available reference implementations
+- search_examples(query): search inside reference implementations by substring
+- get_example(name): return the contents of one reference implementation by filename
 - run_eval_tool(mlir): evaluate your candidate. If your result is unsound or imprecise, it will provide examples of unsound or imprecise cases.
 - run_verify_tool(mlir): SMT-verify the soundness of your candidate. Use this after run_eval_tool reports the candidate as 100% sound, to confirm soundness symbolically (eval is sampling-based and can miss rare unsound inputs).
 

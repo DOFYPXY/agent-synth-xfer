@@ -95,6 +95,42 @@ class LibraryState(BaseModel):
 
 
 @dataclass
+class CollectiveLibrary:
+    """Previously generated transformers collected into a library"""
+
+    results: dict[str, SynthesisResult]
+
+    def to_library_state(self, mask: list[str] = []) -> LibraryState:
+        funcs: list[LibraryFunction] = []
+        for op_name, result in self.results.items():
+            if op_name not in mask and result.solution_text:
+                funcs.append(
+                    LibraryFunction(
+                        function_name=op_name,
+                        docstring=result.task.op_file,
+                        source=result.solution_text,
+                    )
+                )
+        return LibraryState(functions=funcs)
+
+    def update(self, results: list[SynthesisResult]) -> None:
+        """add new results and update ones with greater exactness"""
+        for result in results:
+            if result.is_sound and result.eval_result is not None:
+                op_name = result.task.op_name
+                new_exact = result.eval_result.get_exact_prop()
+                if op_name not in self.results:
+                    self.results[op_name] = result
+                else:
+                    existing_eval = self.results[op_name].eval_result
+                    if (
+                        existing_eval is not None
+                        and new_exact > existing_eval.get_exact_prop()
+                    ):
+                        self.results[op_name] = result
+
+
+@dataclass
 class TokenUsageSummary:
     input_tokens: int
     cached_input_tokens: int
@@ -330,6 +366,25 @@ def rename_xfer(solution: str, new_name: str) -> str:
     return re.sub(rf"@{re.escape(old_name)}\b", f"@{new_name}", solution)
 
 
+def _check_undefined_calls(xfer: list[str], combined: str, helpers) -> None:
+    """Raise ValueError if xfer calls any function not defined in combined or helpers."""
+    called: set[str] = set()
+    for src in xfer:
+        called.update(re.findall(r"func\.call\s+@(\w+)", src))
+    if not called:
+        return
+    defined: set[str] = set(re.findall(r"func\.func\s+@(\w+)", combined))
+    defined.add(helpers.meet_func.sym_name.data)
+    defined.add(helpers.get_top_func.sym_name.data)
+    undefined = called - defined
+    if undefined:
+        names = ", ".join(f"@{n}" for n in sorted(undefined))
+        raise ValueError(
+            f"Transformer calls undefined function(s): {names}. "
+            "Call list_library_functions() to see what is available."
+        )
+
+
 def _run_eval(
     xfer: list[str],
     base: list[str],
@@ -354,6 +409,9 @@ def _run_eval(
     for p in lib + base + xfer:
         if p.strip():
             combined = merge_library_text(combined, p)
+
+    if xfer:
+        _check_undefined_calls(xfer, combined, helpers)
 
     lowerer = LowerToLLVM(all_bws)
     lowerer.add_fn(helpers.meet_func)

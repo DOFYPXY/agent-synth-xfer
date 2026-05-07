@@ -14,6 +14,7 @@ from .compress import run_compress_task
 from .learn import run_library_learn_task, run_stitch_learn
 from .synth import SynthesisAgent, run_synthesis_tasks
 from .util import (
+    CollectiveLibrary,
     EvalArgs,
     LibraryState,
     SynthesisResult,
@@ -35,6 +36,7 @@ def run_library_learning_loop(
 ) -> tuple[LibraryState, list[SynthesisResult]]:
     """Top-level loop: synthesize tasks, then improve library."""
     library = initial_library
+    collective_library = CollectiveLibrary(results={})
     latest_results: list[SynthesisResult] = []
 
     output_dir = Path(args.output)
@@ -65,7 +67,7 @@ def run_library_learning_loop(
         for op_name in perfect_ops:
             print(f"[{op_name.upper()}] Skipping round {round_idx}: already perfect")
         latest_results = asyncio.run(
-            run_synthesis_tasks(synth_agents, tasks_to_run, round_idx, library, args)
+            run_synthesis_tasks(synth_agents, tasks_to_run, round_idx, args)
         )
 
         for r in latest_results:
@@ -87,26 +89,35 @@ def run_library_learning_loop(
 
         # Xuanyu: maybe when meet is enabled, not only the latest solution but the entire solution set should be sent to the library learning.
         if round_idx < num_rounds and not args.no_learn:
-            if args.stitch:
-                library = run_stitch_learn(
-                    version=round_idx + 1,
-                    previous_library=library,
-                    synthesis_results=latest_results,
-                    max_instructions=5,
-                    top_k=5,
-                    args=args,
-                    api_key=api_key,
-                )
+            if args.collective_learn:
+                collective_library.update(latest_results)
             else:
-                library = run_library_learn_task(
-                    version=round_idx + 1,
-                    previous_library=library,
-                    synthesis_results=latest_results,
-                    args=args,
-                    api_key=api_key,
-                )
+                if args.stitch:
+                    library = run_stitch_learn(
+                        version=round_idx + 1,
+                        previous_library=library,
+                        synthesis_results=latest_results,
+                        max_instructions=5,
+                        top_k=5,
+                        args=args,
+                        api_key=api_key,
+                    )
+                else:
+                    library = run_library_learn_task(
+                        version=round_idx + 1,
+                        previous_library=library,
+                        synthesis_results=latest_results,
+                        args=args,
+                        api_key=api_key,
+                    )
+
             for agent in synth_agents.values():
-                agent.update_library(library)
+                if args.collective_learn:
+                    agent.update_library(
+                        collective_library.to_library_state(mask=[agent._task.op_name])
+                    )
+                else:
+                    agent.update_library(library)
             if args.compress:
                 new_results: list[SynthesisResult] = []
                 for result in latest_results:
