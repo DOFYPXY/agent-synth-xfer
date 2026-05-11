@@ -1,120 +1,126 @@
 from typing import List
 
 import egglog
-from xdsl.dialects.func import FuncOp
+from xdsl.dialects.func import CallOp, FuncOp
 
-from synth_xfer.egraph_rewriter.expr_builder import (
-    ExprBuilder,
-    build_meet_expr,
-    simplify_term,
-)
+from synth_xfer._util.domain import AbstractDomain
+from synth_xfer.egraph_rewriter.expr_builder import ExprBuilder, simplify_term
 from synth_xfer.egraph_rewriter.expr_to_mlir import ExprToMLIR
 
 
+def _func_arity(func: FuncOp) -> int:
+    return len(func.body.blocks[0].args)
+
+
+def _has_call_op(func: FuncOp) -> bool:
+    return any(isinstance(op, CallOp) for op in func.body.walk())
+
+
 def rewrite_single_function_to_exprs(
-    func: FuncOp, *, quiet: bool = True, timeout: int = 5
-) -> tuple[tuple[egglog.Expr, ...], dict]:
+    func: FuncOp,
+    *,
+    domain: AbstractDomain,
+    quiet: bool = True,
+    max_iterations: int,
+    step_time_limit_seconds: float,
+) -> tuple[egglog.Expr, dict]:
     """
-    Rewrite a single transfer function by iterating over all its statements.
-    This function specifically handles functions ending with "_body" or "_cond".
-    Prints the expressions without returning anything.
+    Rewrite a single transfer function as one joint AbsValue expression.
 
     Args:
-        func: The function to rewrite (should end with "_body" or "_cond")
-        quiet: Suppress per-expr logging when True.
-        timeout: Maximum number of rewrite passes to run per expression.
+        func: The function to rewrite.
+        domain: Abstract domain whose axioms (if any) should apply.
+        quiet: Suppress per-function logging when True.
+        max_iterations: Hard upper bound on the number of saturation passes.
+        step_time_limit_seconds: Per-iteration wall-clock cap. After any
+            single iteration exceeds this budget, no further iterations are
+            started (the egraph is large enough that the next iteration is
+            expected to be at least as slow).
+
+    Returns:
+        A pair of (simplified joint expression, cmp_predicates).
     """
-    if not quiet:
-        function_name = func.sym_name.data
-        print(f"Rewriting function: {function_name}")
+    print(f"Rewriting function {func.sym_name.data} ...")
 
     expr_builder = ExprBuilder(func)
     expr_builder.build_expr()
-    rewritten_exprs = []
-    for i, expr in enumerate(expr_builder.ret_exprs):
-        simplfied, previous_cost, new_cost = simplify_term(expr, timeout=timeout)
-        if not quiet:
-            print(f"Known{i}: {previous_cost} -> {new_cost}")
-            # print(f"  Before: {expr}")
-            # print(f"  After:  {simplfied}")
-        rewritten_exprs.append(simplfied)
 
-    return tuple(rewritten_exprs), expr_builder.cmp_predicates
+    simplified, previous_cost, new_cost = simplify_term(
+        expr_builder.ret_expr,
+        domain=domain,
+        num_args=_func_arity(func),
+        max_iterations=max_iterations,
+        step_time_limit_seconds=step_time_limit_seconds,
+    )
+    if not quiet:
+        print(f"Expanded AST Size: {previous_cost} -> {new_cost}")
+
+    return simplified, expr_builder.cmp_predicates
 
 
 def rewrite_single_function(
-    func: FuncOp, *, quiet: bool = True, timeout: int = 5
+    func: FuncOp,
+    *,
+    domain: AbstractDomain,
+    quiet: bool = True,
+    max_iterations: int,
+    step_time_limit_seconds: float,
 ) -> FuncOp:
-    # Emit the original MLIR for reference
-    # print("Original MLIR:")
-    # print(func)
-    rewritten_exprs, cmp_predicates = rewrite_single_function_to_exprs(
-        func, quiet=quiet, timeout=timeout
+    joint, cmp_predicates = rewrite_single_function_to_exprs(
+        func,
+        domain=domain,
+        quiet=quiet,
+        max_iterations=max_iterations,
+        step_time_limit_seconds=step_time_limit_seconds,
     )
-    converter = ExprToMLIR(func, cmp_predicates=cmp_predicates)
-    rewritten_func = converter.convert(rewritten_exprs)
-    # Emit the rewritten MLIR for inspection
-    # print("Rewritten MLIR:")
-    # print(f"{rewritten_func}\n")
-    return rewritten_func
-
-
-def should_rewrite_function(func: FuncOp) -> bool:
-    """
-    Check if a function should be rewritten based on its name.
-    Only functions ending with "_body" or "_cond" should be rewritten.
-    """
-    function_name = func.sym_name.data
-    return function_name.endswith("_body") or function_name.endswith("_cond")
+    return ExprToMLIR(func, cmp_predicates=cmp_predicates).convert(joint)
 
 
 def rewrite_solutions(
-    xfer_funcs: List[FuncOp], *, quiet: bool = True, timeout: int = 5
-) -> list[tuple[egglog.Expr, ...]]:
+    xfer_funcs: List[FuncOp],
+    *,
+    domain: AbstractDomain,
+    quiet: bool = True,
+    max_iterations: int,
+    step_time_limit_seconds: float,
+) -> list[FuncOp]:
     """
-    Rewrite transfer functions provided by postprocessor.py.
-    Only functions ending with "_body" or "_cond" will be rewritten.
+    Rewrite every transfer function in the module.
 
     Args:
         xfer_funcs: List of transfer functions to rewrite (from postprocessor.py)
-    """
-    if not quiet:
-        print(f"Starting rewrite of {len(xfer_funcs)} transfer functions")
+        domain: Abstract domain whose axioms (if any) should apply.
+        max_iterations: Hard upper bound on the number of saturation passes per
+            function.
+        step_time_limit_seconds: Per-iteration wall-clock cap (see
+            ``rewrite_single_function_to_exprs``).
 
-    # Filter functions to only include those ending with "_body" or "_cond"
-    functions_to_rewrite = [func for func in xfer_funcs if should_rewrite_function(func)]
-    if not quiet:
+    Returns:
+        A list of rewritten functions, one per input function.
+    """
+    plain_funcs = [f for f in xfer_funcs if not _has_call_op(f)]
+    skipped = [f for f in xfer_funcs if _has_call_op(f)]
+
+    if skipped:
         print(
-            f"Found {len(functions_to_rewrite)} functions to rewrite (ending with '_body' or '_cond'):"
+            f"Skipping {len(skipped)} function(s) containing func.call "
+            "(only plain functions are supported):"
         )
-        for func in functions_to_rewrite:
+        for func in skipped:
             print(f"  - {func.sym_name.data}")
+    print(f"Found {len(plain_funcs)} functions to rewrite:")
+    for func in plain_funcs:
+        print(f"  - {func.sym_name.data}")
 
-    # Rewrite the functions we want to process
-    rewritten_funcs = []
-    for func in functions_to_rewrite:
-        exprs, _ = rewrite_single_function_to_exprs(func, quiet=quiet, timeout=timeout)
-        rewritten_funcs.append(exprs)
-    return rewritten_funcs
-
-
-def rewrite_meet_of_all_functions(
-    all_ret_exprs: List[tuple[egglog.Expr, ...]], *, quiet: bool = True
-) -> None:
-    """
-    Process meet expressions for functions ending with "_body".
-
-    Args:
-        all_ret_exprs: List of return expressions from transfer functions
-    """
-    if not quiet:
-        print(f"Building meet of {len(all_ret_exprs)} functions")
-    meet_exprs = build_meet_expr(all_ret_exprs)
-    if not quiet:
-        print("Done. ")
-        for i, expr in enumerate(meet_exprs):
-            simplfied, previous_cost, new_cost = simplify_term(expr)
-            print(f"Known{i}: {previous_cost} -> {new_cost}")
-            print(f"  Before: {expr}")
-            print(f"  After:  {simplfied}")
-        print("\n")
+    rewritten: list[FuncOp] = []
+    for func in plain_funcs:
+        joint, cmp_predicates = rewrite_single_function_to_exprs(
+            func,
+            domain=domain,
+            quiet=quiet,
+            max_iterations=max_iterations,
+            step_time_limit_seconds=step_time_limit_seconds,
+        )
+        rewritten_func = ExprToMLIR(func, cmp_predicates=cmp_predicates).convert(joint)
+        rewritten.append(rewritten_func)
+    return rewritten

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Sequence, Tuple
+from typing import Any, Dict, Mapping, Tuple
 
 from egglog import Expr
 from egglog.declarations import (
@@ -11,6 +11,8 @@ from egglog.declarations import (
     MethodRef,
     TypedExprDecl,
 )
+from xdsl.dialects.arith import AndIOp, ConstantOp as ArithConstantOp, OrIOp, XOrIOp
+from xdsl.dialects.builtin import IntegerAttr, IntegerType
 from xdsl.dialects.func import FuncOp, ReturnOp
 from xdsl.ir.core import SSAValue
 from xdsl_smt.dialects.transfer import (
@@ -27,48 +29,56 @@ from xdsl_smt.dialects.transfer import (
 
 from synth_xfer.egraph_rewriter.datatypes import cmp_predicate_to_fn, mlir_op_to_egraph_op
 
+ARITH_BINARY_OPS = (AndIOp, OrIOp, XOrIOp)
+DispatchKey = tuple[str, str]
 
-def _build_op_maps() -> tuple[Mapping[str, type], Mapping[str, type]]:
+
+def _ref_key(ref: Any) -> DispatchKey:
+    method_name = getattr(ref, "method_name", None)
+    if not isinstance(method_name, str):
+        raise ValueError(f"Cannot resolve method name from {ref}")
+    ident = getattr(ref, "ident", None)
+    class_name = getattr(ident, "name", None) if ident is not None else None
+    if not isinstance(class_name, str):
+        raise ValueError(f"Cannot resolve class name from {ref}")
+    return class_name, method_name
+
+
+def _build_op_maps() -> tuple[Mapping[DispatchKey, type], Mapping[DispatchKey, type]]:
     """
     Build unary/binary maps directly from the mlir->egraph mapping so we stay
-    consistent when either side changes.
+    consistent when either side changes. Keys are (class_name, method_name) so
+    that, e.g., BV.Or and Bool.Or do not collide.
     """
-    unary: Dict[str, type] = {}
-    binary: Dict[str, type] = {}
+    unary: Dict[DispatchKey, type] = {}
+    binary: Dict[DispatchKey, type] = {}
     for op_cls, func in mlir_op_to_egraph_op.items():
         ref: Any = getattr(func, "__egg_ref__", None)
         if ref is None:
             raise ValueError(f"Missing __egg_ref__ on {func}")
-        name = (
-            ref.method_name if hasattr(ref, "method_name") else getattr(ref, "name", None)
-        )
-        if not isinstance(name, str):
-            raise ValueError(f"Cannot resolve function name for {func}")
+        key = _ref_key(ref)
         if op_cls is SelectOp:
             continue
+        if op_cls in ARITH_BINARY_OPS:
+            binary[key] = op_cls
+            continue
         if issubclass(op_cls, BinOp):
-            binary[name] = op_cls
+            binary[key] = op_cls
             continue
         if issubclass(op_cls, UnaryOp):
-            unary[name] = op_cls
+            unary[key] = op_cls
             continue
-        raise ValueError(f"Cannot classify op {op_cls} for egraph function '{name}'.")
+        raise ValueError(f"Cannot classify op {op_cls} for egraph function '{key}'.")
     return unary, binary
 
 
 UNARY_OPS, BINARY_OPS = _build_op_maps()
-CMP_NAME_TO_PRED: Dict[str, int] = {}
+CMP_NAME_TO_PRED: Dict[DispatchKey, int] = {}
 for pred, fn in cmp_predicate_to_fn.items():
     ref = getattr(fn, "__egg_ref__", None)
     if ref is None:
         continue
-    if hasattr(ref, "method_name"):
-        name = ref.method_name
-    else:
-        name = getattr(ref, "name", None)
-    if not isinstance(name, str):
-        raise ValueError(f"Cannot resolve function name for predicate {pred}")
-    CMP_NAME_TO_PRED[name] = pred
+    CMP_NAME_TO_PRED[_ref_key(ref)] = pred
 
 
 class ExprToMLIR:
@@ -77,8 +87,8 @@ class ExprToMLIR:
     transfer dialect.
     """
 
-    unary_ops: Mapping[str, type] = UNARY_OPS
-    binary_ops: Mapping[str, type] = BINARY_OPS
+    unary_ops: Mapping[DispatchKey, type] = UNARY_OPS
+    binary_ops: Mapping[DispatchKey, type] = BINARY_OPS
 
     def __init__(
         self,
@@ -107,16 +117,31 @@ class ExprToMLIR:
         # now that each comparison predicate maps to its own BV function.
         self.cmp_predicates: Mapping[CallDecl, int] = cmp_predicates or {}
 
-    def convert(self, ret_exprs: Sequence[Expr]) -> FuncOp:
-        self._verify_return_arity(ret_exprs)
-        results: list[SSAValue] = []
-        for expr in ret_exprs:
-            typed_expr = getattr(expr, "__egg_typed_expr__", None)
-            if not isinstance(typed_expr, TypedExprDecl):
-                raise TypeError(
-                    "Expected expression to have a TypedExprDecl at '__egg_typed_expr__'"
-                )
-            results.append(self._convert_decl(typed_expr))
+    def convert(self, joint: Expr) -> FuncOp:
+        typed_expr = getattr(joint, "__egg_typed_expr__", None)
+        if not isinstance(typed_expr, TypedExprDecl):
+            raise TypeError(
+                "Expected joint expression to have a TypedExprDecl at '__egg_typed_expr__'"
+            )
+        call = typed_expr.expr
+        if not isinstance(call, CallDecl):
+            raise TypeError(
+                f"Expected joint expression to be an AbsValue.makeN call, got {type(call)}"
+            )
+        callable_ = call.callable
+        if (
+            not isinstance(callable_, ClassMethodRef)
+            or callable_.ident.name != "AbsValue"
+        ):
+            raise ValueError(f"Expected top-level AbsValue.makeN, got {callable_}")
+
+        expected_arity = self._expected_arity()
+        if len(call.args) != expected_arity:
+            raise ValueError(
+                f"Return arity mismatch: expected {expected_arity}, got {len(call.args)}."
+            )
+
+        results = [self._convert_decl(arg) for arg in call.args]
 
         make_op = MakeOp(results)
         self.block.add_op(make_op)
@@ -189,19 +214,13 @@ class ExprToMLIR:
 
         raise ValueError("Failed to synthesize a constant witness value.")
 
-    def _verify_return_arity(self, ret_exprs: Sequence[Expr]) -> None:
+    def _expected_arity(self) -> int:
         outputs = self.original_func.function_type.outputs.data
         if not outputs or not isinstance(outputs[0], AbstractValueType):
             raise ValueError("Expected function to return an AbstractValueType.")
-
         if len(outputs) != 1:
             raise ValueError("Only single-result functions are supported.")
-
-        expected = len(outputs[0].get_fields())
-        if expected != len(ret_exprs):
-            raise ValueError(
-                f"Return arity mismatch: expected {expected}, got {len(ret_exprs)}."
-            )
+        return len(outputs[0].get_fields())
 
     def _create_constant(self, value: int) -> SSAValue:
         witness = self._get_const_witness()
@@ -210,6 +229,12 @@ class ExprToMLIR:
             self.block.add_op(all_ones)
             return all_ones.result
         const_op = Constant(witness, value)
+        self.block.add_op(const_op)
+        return const_op.result
+
+    def _create_bool_constant(self, value: bool) -> SSAValue:
+        i1 = IntegerType(1)
+        const_op = ArithConstantOp(IntegerAttr(int(value), i1), i1)
         self.block.add_op(const_op)
         return const_op.result
 
@@ -253,33 +278,37 @@ class ExprToMLIR:
                 )
             return self._create_constant(lit.value)
 
+        if (
+            isinstance(callable, ClassMethodRef)
+            and callable.ident.name == "Bool"
+            and callable.method_name in ("true", "false")
+        ):
+            return self._create_bool_constant(callable.method_name == "true")
+
         operands = [self._convert_decl(arg) for arg in call.args]
 
-        method_name = (
-            callable.method_name
-            if isinstance(callable, (ClassMethodRef, MethodRef))
-            else None
-        )
-        if method_name is None:
+        if not isinstance(callable, (ClassMethodRef, MethodRef)):
             raise ValueError(f"Unsupported callable in expression: {callable}")
+        key = _ref_key(callable)
+        method_name = key[1]
 
         if method_name == "ite":
             assert len(operands) == 3
             op = SelectOp(operands[0], operands[1], operands[2])
-        elif method_name in CMP_NAME_TO_PRED:
+        elif key in CMP_NAME_TO_PRED:
             assert len(operands) == 2
-            pred = CMP_NAME_TO_PRED[method_name]
+            pred = CMP_NAME_TO_PRED[key]
             op = CmpOp(operands[0], operands[1], pred)
-        elif method_name in self.unary_ops:
+        elif key in self.unary_ops:
             assert len(operands) == 1
-            op_cls = self.unary_ops[method_name]
+            op_cls = self.unary_ops[key]
             op = op_cls(operands[0])
-        elif method_name in self.binary_ops:
+        elif key in self.binary_ops:
             assert len(operands) == 2
-            op_cls = self.binary_ops[method_name]
+            op_cls = self.binary_ops[key]
             op = op_cls(operands[0], operands[1])
         else:
-            raise ValueError(f"Unsupported BV operation '{method_name}'")
+            raise ValueError(f"Unsupported operation {key}")
 
         self.block.add_op(op)
         return op.result

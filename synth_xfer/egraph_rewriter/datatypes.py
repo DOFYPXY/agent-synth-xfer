@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from egglog import Expr, StringLike, birewrite, i64Like, method, rewrite, ruleset, vars_
+from xdsl.dialects.arith import AndIOp, OrIOp, XOrIOp
 from xdsl.ir import Operation
 from xdsl_smt.dialects.transfer import (
     AddOp,
@@ -37,6 +38,8 @@ from xdsl_smt.dialects.transfer import (
     URemOp,
     XorOp,
 )
+
+from synth_xfer._util.domain import AbstractDomain
 
 
 class BV(Expr):
@@ -129,64 +132,111 @@ class BV(Expr):
     def countr_zero(cls, op: BV) -> BV: ...
 
     @classmethod
-    def ite(cls, cond: BV, lhs: BV, rhs: BV) -> BV: ...
+    def ite(cls, cond: Bool, lhs: BV, rhs: BV) -> BV: ...
 
     @classmethod
     def get_bitwidth(cls, op: BV) -> BV: ...
 
     @classmethod
-    def eq(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def ne(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def slt(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def sle(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def sgt(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def sge(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def ult(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def ule(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def ugt(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
-    def uge(cls, lhs: BV, rhs: BV) -> BV: ...
-
-    @classmethod
     def pop_count(cls, op: BV) -> BV: ...
 
 
-cmp_predicate_to_fn: dict[int, Callable[..., BV]] = {
-    0: BV.eq,  # eq
-    1: BV.ne,  # ne
-    2: BV.slt,
-    3: BV.sle,
-    4: BV.sgt,
-    5: BV.sge,
-    6: BV.ult,
-    7: BV.ule,
-    8: BV.ugt,
-    9: BV.uge,
+class Bool(Expr):
+    @method(cost=0)
+    @classmethod
+    def var(cls, name: StringLike) -> Bool: ...
+
+    @method(cost=0)
+    @classmethod
+    def true(cls) -> Bool: ...
+
+    @method(cost=0)
+    @classmethod
+    def false(cls) -> Bool: ...
+
+    @classmethod
+    def And(cls, lhs: Bool, rhs: Bool) -> Bool: ...
+
+    @classmethod
+    def Or(cls, lhs: Bool, rhs: Bool) -> Bool: ...
+
+    @classmethod
+    def Xor(cls, lhs: Bool, rhs: Bool) -> Bool: ...
+
+    @classmethod
+    def eq(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def ne(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def slt(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def sle(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def sgt(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def sge(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def ult(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def ule(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def ugt(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def uge(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+
+class AbsValue(Expr):
+    """Joint representation of a transfer.abs_value tuple, one constructor per arity."""
+
+    @classmethod
+    def make1(cls, x0: BV) -> AbsValue: ...
+
+    @classmethod
+    def make2(cls, x0: BV, x1: BV) -> AbsValue: ...
+
+
+def make_absvalue(*fields: Expr) -> AbsValue:
+    # The underlying AbsValue.makeN constructors are typed (BV, ...) -> AbsValue;
+    # egglog enforces field types at saturation time. Python signature is loose
+    # here because op_to_expr stores Expr (BV in practice for MakeOp operands).
+    if len(fields) == 1:
+        return AbsValue.make1(fields[0])  # type: ignore[arg-type]
+    if len(fields) == 2:
+        return AbsValue.make2(fields[0], fields[1])  # type: ignore[arg-type]
+    raise ValueError(f"Unsupported AbsValue arity: {len(fields)}")
+
+
+cmp_predicate_to_fn: dict[int, Callable[..., Bool]] = {
+    0: Bool.eq,  # eq
+    1: Bool.ne,  # ne
+    2: Bool.slt,
+    3: Bool.sle,
+    4: Bool.sgt,
+    5: Bool.sge,
+    6: Bool.ult,
+    7: Bool.ule,
+    8: Bool.ugt,
+    9: Bool.uge,
 }
 
-mlir_op_to_egraph_op: dict[type[Operation], Callable[..., BV]] = {
+mlir_op_to_egraph_op: dict[type[Operation], Callable[..., Expr]] = {
     AddOp: BV.__add__,
     SubOp: BV.__sub__,
     AndOp: BV.__and__,
     OrOp: BV.Or,
     XorOp: BV.__xor__,
+    AndIOp: Bool.And,
+    OrIOp: Bool.Or,
+    XOrIOp: Bool.Xor,
     NegOp: BV.Neg,
     MulOp: BV.__mul__,
     UDivOp: BV.udiv,
@@ -216,18 +266,28 @@ mlir_op_to_egraph_op: dict[type[Operation], Callable[..., BV]] = {
 }
 
 
-def gen_ruleset():
+def _knownbits_rules(num_args: int):
+    rules = []
+    for i in range(num_args):
+        kz = BV.var(f"arg{i}_0")  # knownZeros
+        ko = BV.var(f"arg{i}_1")  # knownOnes
+        # KnownBits invariant: a bit cannot be both known-zero and known-one.
+        rules.append(rewrite(kz & ko).to(BV(0)))
+        # Disjoint bitsets: addition equals bitwise-or.
+        rules.append(birewrite(kz + ko).to(BV.Or(kz, ko)))
+    return rules
+
+
+def gen_ruleset(domain: AbstractDomain, num_args: int):
     x, y, z = vars_("x y z", BV)
+    b, c, d = vars_("b c d", Bool)
+
+    domain_rules = []
+    if domain == AbstractDomain.KnownBits:
+        domain_rules = _knownbits_rules(num_args)
+
     return ruleset(
-        # For KnownBits Domain
-        rewrite(BV.var("arg0_0") & BV.var("arg0_1")).to(BV(0)),
-        rewrite(BV.var("arg1_0") & BV.var("arg1_1")).to(BV(0)),
-        birewrite(BV.var("arg0_0") + BV.var("arg0_1")).to(
-            BV.Or(BV.var("arg0_0"), BV.var("arg0_1"))
-        ),
-        birewrite(BV.var("arg1_0") + BV.var("arg1_1")).to(
-            BV.Or(BV.var("arg1_0"), BV.var("arg1_1"))
-        ),
+        *domain_rules,
         # Bitvector Algebra - Idempotent laws
         rewrite(x & x).to(x),
         rewrite(BV.Or(x, x)).to(x),
@@ -489,5 +549,41 @@ def gen_ruleset():
         ),  # OR with masks
         # Constant folding
         rewrite(BV(1) + BV(-1)).to(BV(0)),
+        # Boolean algebra (arith.andi / arith.ori / arith.xori)
+        # Idempotent
+        rewrite(Bool.And(b, b)).to(b),
+        rewrite(Bool.Or(b, b)).to(b),
+        # Commutativity
+        rewrite(Bool.And(b, c)).to(Bool.And(c, b)),
+        rewrite(Bool.Or(b, c)).to(Bool.Or(c, b)),
+        rewrite(Bool.Xor(b, c)).to(Bool.Xor(c, b)),
+        # Associativity
+        birewrite(Bool.And(Bool.And(b, c), d)).to(Bool.And(b, Bool.And(c, d))),
+        birewrite(Bool.Or(Bool.Or(b, c), d)).to(Bool.Or(b, Bool.Or(c, d))),
+        birewrite(Bool.Xor(Bool.Xor(b, c), d)).to(Bool.Xor(b, Bool.Xor(c, d))),
+        # Absorption
+        rewrite(Bool.And(b, Bool.Or(b, c))).to(b),
+        rewrite(Bool.Or(b, Bool.And(b, c))).to(b),
+        # Distributivity
+        birewrite(Bool.And(b, Bool.Or(c, d))).to(Bool.Or(Bool.And(b, c), Bool.And(b, d))),
+        birewrite(Bool.Or(b, Bool.And(c, d))).to(Bool.And(Bool.Or(b, c), Bool.Or(b, d))),
+        # Comparison predicates (transfer.cmp) -- only the symmetric ones
+        rewrite(Bool.eq(x, y)).to(Bool.eq(y, x)),
+        rewrite(Bool.ne(x, y)).to(Bool.ne(y, x)),
+        # Select (transfer.select)
+        rewrite(BV.ite(b, x, x)).to(x),  # both branches identical
+        rewrite(BV.ite(Bool.true(), x, y)).to(x),  # guard known true
+        rewrite(BV.ite(Bool.false(), x, y)).to(y),  # guard known false
+        # Comparison reflexivity -- produce Bool.true / Bool.false
+        rewrite(Bool.eq(x, x)).to(Bool.true()),
+        rewrite(Bool.sle(x, x)).to(Bool.true()),
+        rewrite(Bool.sge(x, x)).to(Bool.true()),
+        rewrite(Bool.ule(x, x)).to(Bool.true()),
+        rewrite(Bool.uge(x, x)).to(Bool.true()),
+        rewrite(Bool.ne(x, x)).to(Bool.false()),
+        rewrite(Bool.slt(x, x)).to(Bool.false()),
+        rewrite(Bool.sgt(x, x)).to(Bool.false()),
+        rewrite(Bool.ult(x, x)).to(Bool.false()),
+        rewrite(Bool.ugt(x, x)).to(Bool.false()),
         name="my_ruleset",
     )
