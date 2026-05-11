@@ -113,6 +113,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if has_benchmark:
         if not args.benchmark.exists():
             parser.error(f"--benchmark: path does not exist: {args.benchmark}")
+        assert args.domain_enum is not None
         try:
             args.op_file = _load_ops_from_bench(args.benchmark, args.domain_enum)
         except ValueError as e:

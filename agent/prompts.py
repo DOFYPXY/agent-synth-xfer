@@ -25,6 +25,7 @@ def _split_sections(text: str) -> dict[str, str]:
         m = _SECTION_HEADER.match(line.strip())
         if m:
             current = m.group(1)
+            assert current is not None
             sections[current] = []
             continue
         if current is not None:
