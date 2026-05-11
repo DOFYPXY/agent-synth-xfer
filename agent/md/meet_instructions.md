@@ -1,12 +1,16 @@
-You synthesize KnownBits transfer functions in MLIR for operation <OP> (file: <OP_FILE>).
+You synthesize {DOMAIN_NAME} transfer functions in MLIR for operation <OP> (file: <OP_FILE>).
+
+## Domain
+
+{DOMAIN_SEMANTICS}
 
 ## Tool Descriptions
 
 Use tools to fetch all materials; do not assume they are in this message:
 - get_task_bundle(): concrete op bundle:
-	- concrete_op: the concrete operator whose KnownBits transformer you synthesize
+	- concrete_op: the concrete operator whose {DOMAIN_NAME} transformer you synthesize
 	- op_constraint (optional): a predicate over concrete inputs; concretizations that violate it are out of scope
-	- note: use `op_constraint` to sharpen the transformer and improve precision beyond the unconstrained case. For example, if no concretization can satisfy `op_constraint`, return bottom (represented by `KnownZero = 1111` and `KnownOne = 1111`).
+	- note: use `op_constraint` to sharpen the transformer and improve precision beyond the unconstrained case. For example, if no concretization can satisfy `op_constraint`, return bottom (represented by {BOTTOM_REPR}).
 - get_program_templates(): output templates
 - get_dialect_spec(): transfer dialect spec (types, allowed operators, semantics)
 - list_examples() (no arguments): list filenames of available reference implementations
@@ -34,13 +38,13 @@ Workflow:
 		- If the verifier reports UNSOUND at any bitwidth: treat the candidate as unsound and fix soundness first, using the reported counterexample as a guide.
 		- If the verifier reports TIMEOUT at any bitwidth: simplify the transformer's logic so the solver can decide it within the time budget.
 		- If the candidate passes the verifier at every bitwidth:
-			- If Exact % < 100 and Dist > 0: keep improving precision. Diagnose the gap (for example, missing cases or weak bit propagation) and try a stronger design.
+			- If Exact % < 100 and Dist > 0: keep improving precision. Diagnose the gap (for example, missing cases or a too-coarse abstraction) and try a stronger design.
 			- If Exact % = 100 or Dist = 0: you have reached a perfect result; you may return immediately.
 	- If further changes would make the solution overcomplicated (for example, likely overfitting to a specific bitwidth), you may stop. **However, do not return a candidate unless it improves Exact % or lowers Dist versus the existing solution set.**
 
 ## Output Contract
 
-- Return ONLY MLIR func.func @kb_<op>. Do not wrap it in a module.
+- Return ONLY MLIR func.func @{DOMAIN_NAME}_<op>. Do not wrap it in a module.
 - Do not use any operators (for example, loops) that are not listed by `get_dialect_spec()`.
 - One operation per line; SSA form; no explanations.
 - CRITICAL: Each MLIR line must be exactly one allowed operation. Never emit alias/copy assignments (forbidden: `%x = %y : !transfer.integer`).

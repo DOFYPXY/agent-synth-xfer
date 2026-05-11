@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from synth_xfer._util.domain import AbstractDomain
 from synth_xfer._util.tsv import EnumData
 
 
@@ -22,15 +23,20 @@ def _parse_bw_triple(s: str) -> tuple[int, int, int]:
     return (parts[0], parts[1], parts[2])
 
 
-def _load_ops_from_bench(bench_path: Path) -> list[str]:
-    """Parse bench.yaml and return list of MLIR op file paths."""
+def _load_ops_from_bench(bench_path: Path, domain: AbstractDomain) -> list[str]:
+    """Parse bench.yaml and return list of MLIR op file paths for `domain`."""
     with bench_path.open() as f:
         data = yaml.safe_load(f)
-    ops = []
-    for _domain, cfg in data.items():
-        for op_name in cfg.get("concrete_ops", []):
-            ops.append(str(Path("mlir/Operations") / f"{op_name}.mlir"))
-    return ops
+    if domain.name not in data:
+        raise ValueError(
+            f"bench.yaml has no top-level key '{domain.name}'. "
+            f"Available keys: {sorted(data.keys())}"
+        )
+    cfg = data[domain.name] or {}
+    return [
+        str(Path("mlir/Operations") / f"{op_name}.mlir")
+        for op_name in cfg.get("concrete_ops", [])
+    ]
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -49,12 +55,17 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if not args.examples_dir.is_dir():
         parser.error(f"--examples-dir: not a directory: {args.examples_dir}")
 
+    if not args.domains_dir.is_dir():
+        parser.error(f"--domains-dir: not a directory: {args.domains_dir}")
+
     if args.library_dir is not None and not args.library_dir.is_dir():
         parser.error(f"--library-dir: not a directory: {args.library_dir}")
 
     has_input = bool(args.input)
     has_benchmark = args.benchmark is not None
     has_op_file = bool(args.op_file)
+
+    args.domain_enum = AbstractDomain[args.domain] if args.domain is not None else None
 
     if bool(args.collective_learn):
         if bool(args.stitch):
@@ -93,11 +104,19 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             parser.error("op_file and --benchmark are mutually exclusive")
         if not has_benchmark and not has_op_file:
             parser.error("provide op_file, --benchmark, or --input")
+        if args.domain is None:
+            parser.error(
+                "--domain is required when using op_file or --benchmark "
+                "(it is inferred from dataset metadata only with --input)"
+            )
 
     if has_benchmark:
         if not args.benchmark.exists():
             parser.error(f"--benchmark: path does not exist: {args.benchmark}")
-        args.op_file = _load_ops_from_bench(args.benchmark)
+        try:
+            args.op_file = _load_ops_from_bench(args.benchmark, args.domain_enum)
+        except ValueError as e:
+            parser.error(str(e))
 
     if args.compress is not None:
         if not args.compress_instructions.exists():
@@ -115,6 +134,20 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
     if args.max_turns <= 0:
         parser.error("--max-turns: must be greater than 0")
+
+    if args.domain_enum is not None:
+        domain_examples_dir = args.examples_dir / args.domain_enum.name
+        if not domain_examples_dir.is_dir():
+            parser.error(
+                f"--examples-dir: missing per-domain subdirectory "
+                f"{domain_examples_dir} for domain {args.domain_enum.name}"
+            )
+        domain_fragment = args.domains_dir / f"{args.domain_enum.name}.md"
+        if not domain_fragment.is_file():
+            parser.error(
+                f"--domains-dir: missing fragment file {domain_fragment} "
+                f"for domain {args.domain_enum.name}"
+            )
 
 
 def parse_args() -> argparse.Namespace:
@@ -139,6 +172,17 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="EnumData TSV input(s) used as evaluation dataset (one per op)",
+    )
+    parser.add_argument(
+        "-d",
+        "--domain",
+        choices=[d.name for d in AbstractDomain],
+        default=None,
+        help=(
+            "Abstract domain (e.g. KnownBits, UConstRange, SConstRange). "
+            "Required with op_file or --benchmark; inferred from --input "
+            "metadata (validated against this flag if also given)."
+        ),
     )
     parser.add_argument(
         "-o", "--output", default="outputs/agent", help="Output directory"
@@ -210,7 +254,21 @@ def parse_args() -> argparse.Namespace:
         "--examples-dir",
         type=Path,
         default=Path(__file__).parent / "examples",
-        help="Path to examples directory (default: agent/examples)",
+        help=(
+            "Path to examples root directory (default: agent/examples). "
+            "Expected layout: <examples-dir>/<DomainName>/*.mlir for "
+            "per-domain examples, plus <examples-dir>/shared/*.mlir for "
+            "domain-agnostic operator-usage corpus."
+        ),
+    )
+    parser.add_argument(
+        "--domains-dir",
+        type=Path,
+        default=Path(__file__).parent / "md" / "domains",
+        help=(
+            "Path to per-domain prompt fragments directory "
+            "(default: agent/md/domains). Each domain needs <DomainName>.md."
+        ),
     )
     parser.add_argument(
         "--spec",
@@ -285,7 +343,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mock-synth",
         action="store_true",
-        help="Skip synthesis agent; return a random example from examples_dir for fast pipeline testing",
+        help=(
+            "Skip synthesis agent; return the canonical top transformer "
+            "from examples_dir/<DomainName>/top.mlir for fast pipeline testing."
+        ),
     )
     parser.add_argument(
         "--no-learn",

@@ -201,14 +201,25 @@ def _parse_library_function(text: str) -> LibraryFunction | None:
     return LibraryFunction(function_name=func_name, docstring=docstring, source=source)
 
 
-def load_initial_library(library_dir: Path | None) -> LibraryState:
-    """Load initial library text for round 0."""
+def load_initial_library(
+    library_dir: Path | None, domain: AbstractDomain
+) -> LibraryState:
+    """Load initial library text for round 0 from `library_dir/<domain>/`.
+
+    `library_dir` is the root that contains per-domain subdirectories
+    (e.g. `agent/library/KnownBits/`). Returns an empty library if
+    `library_dir` is None or the per-domain subdir does not exist.
+    """
 
     if library_dir is None:
         return LibraryState(functions=[])
 
+    domain_dir = library_dir / domain.name
+    if not domain_dir.is_dir():
+        return LibraryState(functions=[])
+
     functions = []
-    for entry in sorted(library_dir.iterdir()):
+    for entry in sorted(domain_dir.iterdir()):
         if not entry.is_file():
             continue
         func = _parse_library_function(entry.read_text())
@@ -323,8 +334,24 @@ def _format_eval_examples_for_agent(
                 "`0` and `1` are known; `?` is unknown.",
             ]
         )
+    elif domain == AbstractDomain.UConstRange:
+        lines.extend(
+            [
+                "  • UConstRange: each input/output is `[lo, hi]` an unsigned interval "
+                "(0 ≤ lo ≤ hi ≤ 2^bw - 1, inclusive). `(bottom)` denotes the empty / "
+                "infeasible interval.",
+            ]
+        )
+    elif domain == AbstractDomain.SConstRange:
+        lines.extend(
+            [
+                "  • SConstRange: each input/output is `[lo, hi]` a signed interval "
+                "(-2^(bw-1) ≤ lo ≤ hi ≤ 2^(bw-1) - 1, inclusive). `(bottom)` denotes "
+                "the empty / infeasible interval.",
+            ]
+        )
     else:
-        assert False, f"Domain {domain} not supported in example formatting yet"
+        raise ValueError(f"Domain {domain} not supported in example formatting yet")
     lines.extend(
         [
             "",
