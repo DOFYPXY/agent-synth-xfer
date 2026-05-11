@@ -22,7 +22,9 @@ from xdsl_smt.dialects.transfer import (
     Constant,
     GetAllOnesOp,
     GetOp,
+    IsNegativeOp,
     MakeOp,
+    OverflowPredicateOp,
     SelectOp,
     UnaryOp,
 )
@@ -30,6 +32,9 @@ from xdsl_smt.dialects.transfer import (
 from synth_xfer.egraph_rewriter.datatypes import cmp_predicate_to_fn, mlir_op_to_egraph_op
 
 ARITH_BINARY_OPS = (AndIOp, OrIOp, XOrIOp)
+EXTRA_UNARY_OPS = (IsNegativeOp,)  # BV -> Bool, not a transfer.UnaryOp subclass
+# OverflowPredicateOp's subclasses (SAdd/UAdd/SSub/USub/SMul/UMul/SShl/UShl OverflowOp)
+# are BV x BV -> Bool but not transfer.BinOp subclasses.
 DispatchKey = tuple[str, str]
 
 
@@ -59,8 +64,11 @@ def _build_op_maps() -> tuple[Mapping[DispatchKey, type], Mapping[DispatchKey, t
         key = _ref_key(ref)
         if op_cls is SelectOp:
             continue
-        if op_cls in ARITH_BINARY_OPS:
+        if op_cls in ARITH_BINARY_OPS or issubclass(op_cls, OverflowPredicateOp):
             binary[key] = op_cls
+            continue
+        if op_cls in EXTRA_UNARY_OPS:
+            unary[key] = op_cls
             continue
         if issubclass(op_cls, BinOp):
             binary[key] = op_cls

@@ -17,11 +17,15 @@ from xdsl_smt.dialects.transfer import (
     CountROneOp,
     CountRZeroOp,
     GetBitWidthOp,
+    GetSignedMaxValueOp,
+    GetSignedMinValueOp,
+    IsNegativeOp,
     LShrOp,
     MulOp,
     NegOp,
     OrOp,
     PopCountOp,
+    SAddOverflowOp,
     SDivOp,
     SelectOp,
     SetHighBitsOp,
@@ -30,12 +34,19 @@ from xdsl_smt.dialects.transfer import (
     ShlOp,
     SMaxOp,
     SMinOp,
+    SMulOverflowOp,
     SRemOp,
+    SShlOverflowOp,
+    SSubOverflowOp,
     SubOp,
+    UAddOverflowOp,
     UDivOp,
     UMaxOp,
     UMinOp,
+    UMulOverflowOp,
     URemOp,
+    UShlOverflowOp,
+    USubOverflowOp,
     XorOp,
 )
 
@@ -140,6 +151,12 @@ class BV(Expr):
     @classmethod
     def pop_count(cls, op: BV) -> BV: ...
 
+    @classmethod
+    def signed_min_value(cls, op: BV) -> BV: ...
+
+    @classmethod
+    def signed_max_value(cls, op: BV) -> BV: ...
+
 
 class Bool(Expr):
     @method(cost=0)
@@ -192,6 +209,33 @@ class Bool(Expr):
 
     @classmethod
     def uge(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def is_negative(cls, x: BV) -> Bool: ...
+
+    @classmethod
+    def sadd_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def uadd_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def ssub_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def usub_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def smul_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def umul_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def sshl_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
+
+    @classmethod
+    def ushl_overflow(cls, lhs: BV, rhs: BV) -> Bool: ...
 
 
 class AbsValue(Expr):
@@ -263,6 +307,17 @@ mlir_op_to_egraph_op: dict[type[Operation], Callable[..., Expr]] = {
     SelectOp: BV.ite,
     GetBitWidthOp: BV.get_bitwidth,
     PopCountOp: BV.pop_count,
+    GetSignedMinValueOp: BV.signed_min_value,
+    GetSignedMaxValueOp: BV.signed_max_value,
+    IsNegativeOp: Bool.is_negative,
+    SAddOverflowOp: Bool.sadd_overflow,
+    UAddOverflowOp: Bool.uadd_overflow,
+    SSubOverflowOp: Bool.ssub_overflow,
+    USubOverflowOp: Bool.usub_overflow,
+    SMulOverflowOp: Bool.smul_overflow,
+    UMulOverflowOp: Bool.umul_overflow,
+    SShlOverflowOp: Bool.sshl_overflow,
+    UShlOverflowOp: Bool.ushl_overflow,
 }
 
 
