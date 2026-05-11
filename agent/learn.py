@@ -11,7 +11,9 @@ from pydantic_ai.usage import UsageLimits
 
 from agent.stitch.converter import pattern_to_mlir_program
 from agent.stitch.search import search_patterns
+from synth_xfer._util.domain import AbstractDomain
 
+from .prompts import DomainFragment, fill_template, load_domain_fragment
 from .util import (
     FunctionDocumentation,
     LibraryFunction,
@@ -36,6 +38,8 @@ def _run_agent_learn(
     spec_path: Path,
     instructions_path: Path,
     max_turns: int,
+    domain: AbstractDomain,
+    fragment: DomainFragment,
 ) -> tuple[LibraryState, object]:
     """Run agent to learn library functions. Returns (LibraryState, run_result)."""
     del api_key  # Reserved for future model/provider auth parity.
@@ -92,9 +96,12 @@ def _run_agent_learn(
                 break
         return json.dumps(matches)
 
+    instructions_text = fill_template(
+        instructions_path.read_text(encoding="utf-8").strip(), domain, fragment
+    )
     agent = Agent(
         name="LibraryFunctionLearner",
-        instructions=instructions_path.read_text(encoding="utf-8").strip(),
+        instructions=instructions_text,
         tools=[
             get_corpus_functions,
             get_dialect_spec,
@@ -107,8 +114,9 @@ def _run_agent_learn(
     )
 
     soft_limit = max_turns - 2
+    filled_prompt = fill_template(prompt, domain, fragment)
     prompt_with_limit = (
-        f"{prompt}\nYou have at most {soft_limit} iterations to complete this task. "
+        f"{filled_prompt}\nYou have at most {soft_limit} iterations to complete this task. "
         "If you are about to exceed this limit, stop and return the library you have "
         "generated so far."
     )
@@ -131,6 +139,8 @@ def _name_one_function(
     max_turns: int,
     library: LibraryState,
     func_to_name: str,
+    domain: AbstractDomain,
+    fragment: DomainFragment,
 ) -> tuple[LibraryFunction | None, object]:
     """Given the source for an MLIR function, provide a name and docstring for it agentically."""
     del api_key  # Reserved for future model/provider auth parity.
@@ -163,9 +173,12 @@ def _name_one_function(
         """Return the transfer dialect specification (types, allowed operators, and semantics)."""
         return spec_path.read_text(encoding="utf-8")
 
+    instructions_text = fill_template(
+        instructions_path.read_text(encoding="utf-8").strip(), domain, fragment
+    )
     agent = Agent(
         name="AutoDocumenter",
-        instructions=instructions_path.read_text(encoding="utf-8").strip(),
+        instructions=instructions_text,
         tools=[
             get_function_code,
             get_library_function,
@@ -219,6 +232,8 @@ def run_stitch_learn(
     print(f"Library learning with Stitch and autodoc agent, version {version}")
 
     output_dir = Path(args.output)
+    domain: AbstractDomain = args.domain_enum
+    fragment = load_domain_fragment(args.domains_dir, domain)
 
     progs = set()
     for result in synthesis_results:
@@ -260,6 +275,8 @@ def run_stitch_learn(
             max_turns=args.max_turns,
             library=previous_library,
             func_to_name=hit,
+            domain=domain,
+            fragment=fragment,
         )
         if lib_func is not None:
             new_lib_funcs.append(lib_func)
@@ -284,6 +301,8 @@ def run_library_learn_task(
     print(f"\nLearning library version {version}")
 
     prompt = args.library_prompt.read_text()
+    domain: AbstractDomain = args.domain_enum
+    fragment = load_domain_fragment(args.domains_dir, domain)
 
     output_dir = Path(args.output)
     print(f"Using model: {args.library_model}")
@@ -297,6 +316,8 @@ def run_library_learn_task(
         spec_path=args.spec,
         instructions_path=args.library_instructions,
         max_turns=args.max_turns,
+        domain=domain,
+        fragment=fragment,
     )
 
     if run_result is not None:
@@ -367,6 +388,20 @@ def main():
         help="Optional initial library directory for library-learning workflow",
     )
     parser.add_argument(
+        "--domain",
+        choices=[d.name for d in AbstractDomain],
+        required=True,
+        help="Abstract domain (e.g. KnownBits, UConstRange, SConstRange).",
+    )
+    parser.add_argument(
+        "--domains-dir",
+        type=Path,
+        default=Path(__file__).parent / "md" / "domains",
+        help=(
+            "Path to per-domain prompt fragments directory (default: agent/md/domains)."
+        ),
+    )
+    parser.add_argument(
         "--rounds",
         type=int,
         default=1,
@@ -401,8 +436,19 @@ def main():
     if args.library_dir is not None and not args.library_dir.is_dir():
         parser.error(f"--library-dir: not a directory: {args.library_dir}")
 
+    if not args.domains_dir.is_dir():
+        parser.error(f"--domains-dir: not a directory: {args.domains_dir}")
+
     if args.max_turns <= 0:
         parser.error("--max-turns: must be greater than 0")
+
+    args.domain_enum = AbstractDomain[args.domain]
+    domain_fragment_path = args.domains_dir / f"{args.domain_enum.name}.md"
+    if not domain_fragment_path.is_file():
+        parser.error(
+            f"--domains-dir: missing fragment file {domain_fragment_path} "
+            f"for domain {args.domain_enum.name}"
+        )
 
     # Parse input files
     corpus = []
@@ -417,7 +463,7 @@ def main():
         corpus.append(result)
 
     api_key = get_api_key()
-    lib = load_initial_library(args.library_dir)
+    lib = load_initial_library(args.library_dir, args.domain_enum)
 
     for rnd in range(args.rounds):
         if args.stitch:

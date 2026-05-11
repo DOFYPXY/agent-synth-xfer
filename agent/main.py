@@ -32,7 +32,7 @@ def run_library_learning_loop(
     initial_library: LibraryState,
     args,
     api_key: str,
-    eval_args_by_op: dict[str, EvalArgs] | None = None,
+    eval_args_by_op: dict[str, EvalArgs],
 ) -> tuple[LibraryState, list[SynthesisResult]]:
     """Top-level loop: synthesize tasks, then improve library."""
     library = initial_library
@@ -49,9 +49,7 @@ def run_library_learning_loop(
             args,
             api_key,
             library,
-            eval_args_override=(
-                eval_args_by_op.get(task.op_name) if eval_args_by_op else None
-            ),
+            eval_args=eval_args_by_op[task.op_name],
         )
         for task in tasks
     }
@@ -147,24 +145,45 @@ def run_library_learning_loop(
 
 def build_tasks_and_eval_args(
     args,
-) -> tuple[list[SynthesisTask], dict[str, EvalArgs] | None]:
-    """Build synthesis tasks and optional eval overrides from CLI args."""
+) -> tuple[list[SynthesisTask], dict[str, EvalArgs]]:
+    """Build synthesis tasks and per-task EvalArgs from CLI args."""
     if not args.input:
-        tasks = [
-            SynthesisTask(op_file=op_file, op_name=extract_op_name(op_file))
-            for op_file in args.op_file
-        ]
-        return tasks, None
+        domain: AbstractDomain = args.domain_enum
+        tasks: list[SynthesisTask] = []
+        eval_args_by_op: dict[str, EvalArgs] = {}
+        for op_file in args.op_file:
+            op_name = extract_op_name(op_file)
+            tasks.append(SynthesisTask(op_file=op_file, op_name=op_name))
+            eval_args_by_op[op_name] = EvalArgs(
+                op_path=Path(op_file),
+                domain=domain,
+                lbw=args.lbw,
+                mbw=args.mbw,
+                hbw=args.hbw,
+                unsound_ex=5,
+                imprecise_ex=5,
+            )
+        return tasks, eval_args_by_op
 
     tasks: list[SynthesisTask] = []
     eval_args_by_op: dict[str, EvalArgs] = {}
+    seen_domain: AbstractDomain | None = None
     for input_path in args.input:
         with input_path.open("r", encoding="utf-8") as f:
             data = EnumData.read_tsv(f)
 
-        if data.metadata.domain != AbstractDomain.KnownBits:
+        if args.domain_enum is not None and data.metadata.domain != args.domain_enum:
             raise ValueError(
-                "agent-synth --input currently supports only KnownBits datasets"
+                f"--domain={args.domain_enum.name} does not match dataset "
+                f"'{input_path}' metadata domain={data.metadata.domain.name}"
+            )
+        if seen_domain is None:
+            seen_domain = data.metadata.domain
+        elif data.metadata.domain != seen_domain:
+            raise ValueError(
+                f"--input datasets mix domains: {seen_domain.name} and "
+                f"{data.metadata.domain.name} (from '{input_path}'). "
+                "All --input TSVs in a single run must share one domain."
             )
 
         op_path = resolve_dataset_op_path(data.metadata.op)
@@ -187,6 +206,9 @@ def build_tasks_and_eval_args(
         )
         tasks.append(task)
         eval_args_by_op[op_name] = eval_args
+    if seen_domain is not None:
+        args.domain_enum = seen_domain
+        args.domain = seen_domain.name
     return tasks, eval_args_by_op
 
 
@@ -197,7 +219,22 @@ def main():
     api_key = get_api_key()
 
     tasks, eval_args_by_op = build_tasks_and_eval_args(args)
-    initial_library = load_initial_library(args.library_dir)
+
+    domain: AbstractDomain = args.domain_enum
+    domain_examples_dir = args.examples_dir / domain.name
+    if not domain_examples_dir.is_dir():
+        raise ValueError(
+            f"--examples-dir: missing per-domain subdirectory "
+            f"{domain_examples_dir} for domain {domain.name}"
+        )
+    domain_fragment_path = args.domains_dir / f"{domain.name}.md"
+    if not domain_fragment_path.is_file():
+        raise ValueError(
+            f"--domains-dir: missing fragment file {domain_fragment_path} "
+            f"for domain {domain.name}"
+        )
+
+    initial_library = load_initial_library(args.library_dir, domain)
 
     final_library, latest_results = run_library_learning_loop(
         tasks,
