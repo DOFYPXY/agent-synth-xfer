@@ -12,6 +12,7 @@ from pydantic_ai.usage import UsageLimits
 from agent.agent_solution_set import AgentSolutionSet
 from synth_xfer._util.domain import AbstractDomain
 
+from .prompts import DomainFragment, fill_template, load_domain_fragment
 from .util import (
     EvalArgs,
     LibraryState,
@@ -25,20 +26,22 @@ from .util import (
 )
 
 
-def _make_initial_prompt(task: SynthesisTask) -> str:
-    return f"Synthesize the KnownBits transfer function for operation {task.op_name} (file: {task.op_file})."
+def _make_initial_prompt(task: SynthesisTask, domain: AbstractDomain) -> str:
+    return (
+        f"Synthesize the {domain.name} transfer function for operation "
+        f"{task.op_name} (file: {task.op_file})."
+    )
 
 
 def build_agent_instructions(
     template: str,
     op_name: str,
     op_file: str,
+    domain: AbstractDomain,
+    fragment: DomainFragment,
 ) -> str:
-    """Instantiate agent_instructions.md template with task-specific values."""
-    instructions = template.replace("<OP>", op_name)
-    instructions = instructions.replace("<op>", op_name)
-    instructions = instructions.replace("<OP_FILE>", op_file)
-    return instructions
+    """Instantiate agent_instructions.md template with task and domain values."""
+    return fill_template(template, domain, fragment, op_name=op_name, op_file=op_file)
 
 
 class SynthesisAgent:
@@ -50,7 +53,7 @@ class SynthesisAgent:
         args,
         api_key: str,
         current_lib: LibraryState,
-        eval_args_override: EvalArgs | None = None,
+        eval_args: EvalArgs,
     ) -> None:
         self._task = task
         self._args = args
@@ -58,17 +61,11 @@ class SynthesisAgent:
         self._soln_iters: list[str] = []
         self._current_round: int = 0
         self._eval_call_idx: int = 0
-        self._eval_args = eval_args_override or EvalArgs(
-            op_path=Path(task.op_file),
-            domain=AbstractDomain.KnownBits,
-            lbw=args.lbw,
-            mbw=args.mbw,
-            hbw=args.hbw,
-            unsound_ex=5,
-            imprecise_ex=5,
-        )
+        self._eval_args = eval_args
+        self._domain = eval_args.domain
+        self._domain_fragment = load_domain_fragment(args.domains_dir, self._domain)
         self._agent = self._build_agent(args, api_key)
-        self.solution_set = AgentSolutionSet(current_lib)
+        self.solution_set = AgentSolutionSet(current_lib, self._domain)
 
     def update_library(self, new_lib: LibraryState) -> None:
         """Update the library used by this agent's tools."""
@@ -78,18 +75,28 @@ class SynthesisAgent:
     def _build_agent(self, args, api_key: str) -> Agent:
         del api_key  # Reserved for future model/provider auth parity.
         task = self._task
+        domain = self._domain
         template_path: Path = args.template
         spec_path: Path = args.spec
         examples_dir: Path = args.examples_dir
+        domain_examples_dir = examples_dir / domain.name
+        shared_examples_dir = examples_dir / "shared"
         instructions_path: Path = (
             args.meet_instructions if args.meet else args.agent_instructions
         )
+
+        def _example_paths() -> list[Path]:
+            paths: list[Path] = []
+            for d in (domain_examples_dir, shared_examples_dir):
+                if d.is_dir():
+                    paths.extend(sorted(d.glob("*.mlir")))
+            return paths
 
         def get_task_bundle() -> str:
             """Return JSON with op_name, op_file, and op_content.
 
             op_content is the MLIR module from op_file and includes:
-            - concrete_op: the concrete operator whose KnownBits transformer you must synthesize.
+            - concrete_op: the concrete operator whose transfer function you must synthesize.
             - op_constraint (optional): a predicate over concrete inputs; concretizations that violate it are out of scope.
             """
             print(f"[{task.op_name.upper()}] [TOOL] get_task_bundle", flush=True)
@@ -165,27 +172,39 @@ class SynthesisAgent:
             return json.dumps(matches)
 
         def list_examples() -> str:
-            """List available example transformer files as JSON array of filenames."""
+            """List available example transformer files as JSON array of filenames.
+
+            Filenames are prefixed with their subdirectory ("<DomainName>/foo.mlir"
+            or "shared/bar.mlir"); pass the same prefixed name back to get_example.
+            """
             print(f"[{task.op_name.upper()}] [TOOL] list_examples", flush=True)
-            names = (
-                [p.name for p in sorted(examples_dir.glob("*.mlir"))]
-                if examples_dir.exists()
-                else []
-            )
+            names = [f"{p.parent.name}/{p.name}" for p in _example_paths()]
             return json.dumps(names)
 
         def get_example(name: str) -> str:
-            """Return the contents of one example transformer file by filename (e.g. 'kb_xor.mlir')."""
+            """Return the contents of one example transformer file by name.
+
+            Use the "<subdir>/<file>.mlir" form returned by list_examples (e.g.
+            "{DOMAIN}/top.mlir" or "shared/ex_0_827_109.mlir"). For backward
+            compatibility, a bare filename is also resolved against the
+            domain-specific and shared subdirs in that order.
+            """
             print(f"[{task.op_name.upper()}] [TOOL] get_example: {name!r}", flush=True)
-            p = (examples_dir / name).resolve()
             ex_dir = examples_dir.resolve()
-            if ex_dir not in p.parents:
+            candidate = (examples_dir / name).resolve()
+            if "/" not in name:
+                for d in (domain_examples_dir, shared_examples_dir):
+                    fallback = (d / name).resolve()
+                    if fallback.is_file():
+                        candidate = fallback
+                        break
+            if ex_dir != candidate and ex_dir not in candidate.parents:
                 return "Error: example name must refer to a file under the examples directory"
-            if p.suffix != ".mlir":
+            if candidate.suffix != ".mlir":
                 return "Error: example must be a .mlir file"
-            if not p.is_file():
+            if not candidate.is_file():
                 return f"Error: example {name!r} does not exist. Call list_examples() to see available files."
-            return p.read_text(encoding="utf-8")
+            return candidate.read_text(encoding="utf-8")
 
         def search_examples(query: str, top_k: int = 3) -> str:
             """Search inside reference implementations by substring 'query' to understand the usage of operators. Returns JSON array of matches with filename and snippet."""
@@ -198,7 +217,7 @@ class SynthesisAgent:
             if not q:
                 return "[]"
             matches: list[dict] = []
-            for p in sorted(examples_dir.glob("*.mlir")) if examples_dir.exists() else []:
+            for p in _example_paths():
                 if not p.is_file():
                     continue
                 text = p.read_text(encoding="utf-8", errors="replace")
@@ -209,7 +228,7 @@ class SynthesisAgent:
                 end = min(len(text), idx + 200)
                 matches.append(
                     {
-                        "name": p.name,
+                        "name": f"{p.parent.name}/{p.name}",
                         "start": start,
                         "end": end,
                         "snippet": text[start:end],
@@ -220,7 +239,7 @@ class SynthesisAgent:
             return json.dumps(matches)
 
         def run_eval_tool(transformer_mlir: str) -> str:
-            """Evaluate the generated transformer MLIR for the current operation (e.g. kb_<op>). Pass the raw MLIR code as a string. Uses `--exact-bw` bitwidths from the CLI (default 8).
+            """Evaluate the generated transformer MLIR for the current operation (named @<DomainName>_<op>). Pass the raw MLIR code as a string. Uses `--exact-bw` bitwidths from the CLI (default 8).
 
             First line is always a short summary:
             - Sound %: fraction of inputs where the abstract output is sound
@@ -325,6 +344,8 @@ class SynthesisAgent:
                 instructions_path.read_text(encoding="utf-8").strip(),
                 task.op_name,
                 task.op_file,
+                domain,
+                self._domain_fragment,
             ),
             tools=[
                 get_task_bundle,
@@ -351,7 +372,7 @@ class SynthesisAgent:
         self._current_round = round_num
         self._eval_call_idx = 0
         if round_num <= 0:
-            user_content = f"{_make_initial_prompt(self._task)}\n"
+            user_content = f"{_make_initial_prompt(self._task, self._domain)}\n"
         else:
             user_content = (
                 f"The library has been updated for round {round_num}. "
@@ -391,7 +412,8 @@ async def run_single_synthesis_task(
     run_result = None
     synthesis_time = 0.0
     if args.mock_synth:
-        soln_iters = [(Path(__file__).parent / "examples" / "kb_top.mlir").read_text()]
+        mock_path = Path(args.examples_dir) / synth_agent._domain.name / "top.mlir"
+        soln_iters = [mock_path.read_text()]
     else:
         print(f"{tag} Using model: {args.synth_model}")
         t0 = time.monotonic()

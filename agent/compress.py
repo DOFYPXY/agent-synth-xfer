@@ -7,6 +7,9 @@ import re
 from pydantic_ai import Agent
 from pydantic_ai.usage import UsageLimits
 
+from synth_xfer._util.domain import AbstractDomain
+
+from .prompts import DomainFragment, fill_template, load_domain_fragment
 from .util import (
     EvalArgs,
     LibraryState,
@@ -29,6 +32,8 @@ def _run_agent_compress(
     instructions_path: Path,
     max_turns: int,
     eval_args: EvalArgs,
+    domain: AbstractDomain,
+    fragment: DomainFragment,
 ) -> tuple[str, object]:
     """Run agent to compress a target file. Returns (final_output, run_result)."""
     del api_key  # Reserved for future model/provider auth parity.
@@ -105,9 +110,12 @@ def _run_agent_compress(
             )
         return "Correctness check successful! Compression is valid."
 
+    instructions_text = fill_template(
+        instructions_path.read_text(encoding="utf-8").strip(), domain, fragment
+    )
     agent = Agent(
         name="TargetFileCompressor",
-        instructions=instructions_path.read_text(encoding="utf-8").strip(),
+        instructions=instructions_text,
         tools=[
             get_target_file,
             get_dialect_spec,
@@ -119,7 +127,10 @@ def _run_agent_compress(
         model=model,
     )
 
-    result = agent.run_sync(prompt, usage_limits=UsageLimits(request_limit=max_turns))
+    filled_prompt = fill_template(prompt, domain, fragment)
+    result = agent.run_sync(
+        filled_prompt, usage_limits=UsageLimits(request_limit=max_turns)
+    )
 
     return (result.output, result)
 
@@ -139,6 +150,8 @@ def run_compress_task(
 
     # Read prompt
     prompt = args.compress_prompt.read_text()
+    domain = eval_args.domain
+    fragment = load_domain_fragment(args.domains_dir, domain)
 
     output_dir = Path(args.output)
     op_output_dir = get_op_output_dir(output_dir, op_name)
@@ -154,6 +167,8 @@ def run_compress_task(
         instructions_path=args.compress_instructions,
         max_turns=args.max_turns,
         eval_args=eval_args,
+        domain=domain,
+        fragment=fragment,
     )
     summary = summarize_token_usage(run_result)
     print(summary)
@@ -163,7 +178,7 @@ def run_compress_task(
     transformer_file = save_file(
         target_text,
         op_output_dir,
-        f"kb_r{round_num}_{op_name}_compressed.mlir",
+        f"{domain.name}_r{round_num}_{op_name}_compressed.mlir",
     )
     print(f"Transformer: {transformer_file}")
 
