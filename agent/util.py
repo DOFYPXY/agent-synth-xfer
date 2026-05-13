@@ -520,8 +520,7 @@ def verify_transformer(
             elif not is_sound:
                 problems[bw] = model
     except Exception as e:
-        msg = " ".join(str(e).splitlines())[:1500]
-        return (f"error: {msg}", None)
+        return (f"error: {str(e)}", None)
 
     if not problems:
         return ("VERIFIED sound at all checked bitwidths", problems)
@@ -568,7 +567,4 @@ def eval_transformer(
         )
 
     except Exception as e:
-        msg = str(e).strip() or repr(e) or type(e).__name__
-        # Single line, truncated, so the agent reliably sees parse/location info
-        msg_flat = " ".join(msg.splitlines())[:1500]
-        return (f"error: {msg_flat}", None)
+        return (f"error: {str(e)}", None)

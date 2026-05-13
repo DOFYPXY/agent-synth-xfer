@@ -19,6 +19,27 @@ The `transfer` dialect models integer transfer functions over `!transfer.integer
 - `!transfer.integer`: arbitrary-bitwidth integer placeholder.
 - `!transfer.abs_value<[!transfer.integer, ...]>`: homogeneous container of transfer integers.
 
+### 3.1 Concise syntax convention
+
+Most `transfer` ops print a single type after `:`. **That type is the operand element type, not the result type.** This mirrors `arith` (e.g. `arith.cmpi ult, %x, %y : i32` — `i32` is the operand type; the result is implicitly `i1`).
+
+```mlir
+%r = transfer.op %x[, %y, ...] : !transfer.integer
+```
+
+The result type is fixed by the op definition and not written in the concise form:
+
+- **Arithmetic / bitwise ops** (§5.1, §5.2): result is `!transfer.integer` — same as the printed type.
+- **Predicate ops** (§4 `transfer.cmp`, `transfer.is_negative`; §5.3 `*_overflow`): result is `i1`, even though the type after `:` is `!transfer.integer`.
+- **`transfer.select %cond, %t, %f : !transfer.integer`**: `%cond` is implicitly `i1`; the printed type is the type of `%t`, `%f`, and the result.
+
+Ops whose signature can't be recovered from one type spell out the full functional form explicitly:
+
+- `transfer.make`: `(operand-types) -> result-type`
+- `transfer.get`: `operand-type -> result-type`
+
+When reading a concise-form op, derive the result type from the op's signature in §4 / §5, not from the `:` annotation.
+
 ## 4. Special Ops
 
 These ops have special structure and do not fit simple unary/binary families.

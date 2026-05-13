@@ -53,8 +53,7 @@ class AgentSolutionSet:
             base_res = self.eval_base(eval_args)
             return f"Previous: {base_res}\n Updated: {upd_res}", upd_result
         except Exception as e:
-            msg = str(e).strip() or repr(e) or type(e).__name__
-            return f"error: {' '.join(msg.splitlines())[:1500]}", None
+            return f"error: {str(e)}", None
 
     def eval_base(self, eval_args: EvalArgs) -> str:
         """Evaluate existing solutions with top as the candidate. Returns summary string."""
